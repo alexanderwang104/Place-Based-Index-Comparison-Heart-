@@ -985,7 +985,7 @@ concordance(Surv(heart_SVM_complete$survival_time, heart_SVM_complete$transplant
 
 
 ```{r AUC}
-
+set.seed(1234)
 SVM_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
 SVI_model_transplant<- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
 ADI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
@@ -1033,12 +1033,10 @@ avg_patient2 <- tibble(
 avg_patient3 <- tibble(
   dci_percentile = rep(seq(0,100),2))
 
-
 hazard_transplant_SVM <- predict(SVM_model_transplant, newdata = avg_patient)
 hazard_transplant_SVI <- predict(SVI_model_transplant, newdata = avg_patient1)
 hazard_transplant_ADI <- predict(ADI_model_transplant, newdata = avg_patient2)
 hazard_transplant_DCI <- predict(DCI_model_transplant, newdata = avg_patient3)
-
 
 change_basecase_to_first_percentile <- function(hazard_list){
   log_haz_1st_SVM <- hazard_list[[50]]
@@ -1052,7 +1050,6 @@ hazard_transplant_SVM <- change_basecase_to_first_percentile(hazard_transplant_S
 hazard_transplant_SVI <- change_basecase_to_first_percentile(hazard_transplant_SVI)
 hazard_transplant_ADI <- change_basecase_to_first_percentile(hazard_transplant_ADI)
 hazard_transplant_DCI <- change_basecase_to_first_percentile(hazard_transplant_DCI)
-
 
 
 spline_transplant <- avg_patient |> 
@@ -1073,6 +1070,8 @@ spline_transplant <- avg_patient |>
 spline_transplant
   
 ```
+
+
 ```{r death spline}
 SVM_model_death <- coxph(Surv(survival_time,death_outcome) ~ rcs(SVM_PERCENTILE), data = heart_SVM)
 SVI_model_death <- coxph(Surv(survival_time,death_outcome) ~ rcs(SVI_percentile) , data = heart_SVM)
@@ -1258,5 +1257,216 @@ labs(
   theme(plot.title = element_text(hjust=0.5))
 
 grid.arrange(svm_cuminc, svi_cuminc, adi_cuminc, dci_cuminc, ncol=2, nrow = 2 )
+```
+
+```{r}
+set.seed(1234)
+SVM_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+SVI_model_transplant<- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+ADI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+DCI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(dci_percentile)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+
+avg_patient <- tibble(
+  SVM_PERCENTILE = rep(seq(0,100)))
+avg_patient1 <- tibble(
+  SVI_percentile = rep(seq(0,100)))
+avg_patient2 <- tibble(
+  mean_ADI = rep(seq(0,100)))
+avg_patient3 <- tibble(
+  dci_percentile = rep(seq(0,100)))
+
+
+hazard_transplant_SVM <- predict_coxme(SVM_model_transplant, newdata = avg_patient, type = c("risk"))
+hazard_transplant_SVI <- predict_coxme(SVI_model_transplant, newdata = avg_patient1, type = c("risk"))
+hazard_transplant_ADI <- predict_coxme(ADI_model_transplant, newdata = avg_patient2, type = c("risk"))
+hazard_transplant_DCI <- predict_coxme(DCI_model_transplant, newdata = avg_patient3, type = c("risk"))
+
+
+
+change_basecase_to_first_percentile <- function(hazard_list){
+  log_haz_1st_SVM <- hazard_list[[52]]
+
+hazard_list<- hazard_list - log_haz_1st_SVM
+
+exp(hazard_list)
+  
+}
+hazard_transplant_SVM <- change_basecase_to_first_percentile(hazard_transplant_SVM)
+
+
+
+hazard_transplant_SVM <- change_basecase_to_first_percentile(hazard_transplant_SVM)
+hazard_transplant_SVI <- change_basecase_to_first_percentile(hazard_transplant_SVI)
+hazard_transplant_ADI <- change_basecase_to_first_percentile(hazard_transplant_ADI)
+hazard_transplant_DCI <- change_basecase_to_first_percentile(hazard_transplant_DCI)
+
+
+spline_transplant <- avg_patient |> 
+  cbind(hazard_transplant_SVM,
+        hazard_transplant_SVI,
+        hazard_transplant_ADI, 
+        hazard_transplant_DCI) |> 
+  ggplot()+
+  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_transplant_SVM, color = "SVM"), data = avg_patient) +
+    geom_smooth(aes(x=SVI_percentile, y = hazard_transplant_SVI, color = "SVI"), data = avg_patient1)+
+    geom_smooth(aes(x=mean_ADI, y = hazard_transplant_ADI, color = "ADI"), data = avg_patient2)+
+    geom_smooth(aes(x=dci_percentile, y = hazard_transplant_DCI, color = "DCI"), data = avg_patient3)+
+  xlab("SDoH Composite Score Percentile")+
+  ylab("Cause Specific HR of Transplant")+
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+
+spline_transplant
+
+```
+
+```{r}
+set.seed(1234)
+SVM_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+SVI_model_death<- coxme(Surv(survival_time,death_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+ADI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+DCI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(dci_percentile)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+
+avg_patient <- tibble(
+  SVM_PERCENTILE = rep(seq(0,100)))
+avg_patient1 <- tibble(
+  SVI_percentile = rep(seq(0,100)))
+avg_patient2 <- tibble(
+  mean_ADI = rep(seq(0,100)))
+avg_patient3 <- tibble(
+  dci_percentile = rep(seq(0,100)))
+
+
+hazard_death_SVM <- predict_coxme(SVM_model_death, newdata = avg_patient, type = c("risk"))
+hazard_death_SVI <- predict_coxme(SVI_model_death, newdata = avg_patient1, type = c("risk"))
+hazard_death_ADI <- predict_coxme(ADI_model_death, newdata = avg_patient2, type = c("risk"))
+hazard_death_DCI <- predict_coxme(DCI_model_death, newdata = avg_patient3, type = c("risk"))
+
+
+
+change_basecase_to_first_percentile <- function(hazard_list){
+  log_haz_1st_SVM <- hazard_list[[52]]
+
+hazard_list<- hazard_list - log_haz_1st_SVM
+
+exp(hazard_list)
+  
+}
+hazard_death_SVM <- change_basecase_to_first_percentile(hazard_death_SVM)
+
+
+
+hazard_death_SVM <- change_basecase_to_first_percentile(hazard_death_SVM)
+hazard_death_SVI <- change_basecase_to_first_percentile(hazard_death_SVI)
+hazard_death_ADI <- change_basecase_to_first_percentile(hazard_death_ADI)
+hazard_death_DCI <- change_basecase_to_first_percentile(hazard_death_DCI)
+
+
+spline_death <- avg_patient |> 
+  cbind(hazard_death_SVM,
+        hazard_death_SVI,
+        hazard_death_ADI, 
+        hazard_death_DCI) |> 
+  ggplot()+
+  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_death_SVM, color = "SVM"), data = avg_patient) +
+    geom_smooth(aes(x=SVI_percentile, y = hazard_death_SVI, color = "SVI"), data = avg_patient1)+
+    geom_smooth(aes(x=mean_ADI, y = hazard_death_ADI, color = "ADI"), data = avg_patient2)+
+    geom_smooth(aes(x=dci_percentile, y = hazard_death_DCI, color = "DCI"), data = avg_patient3)+
+  xlab("SDoH Composite Score Percentile")+
+  ylab("Cause Specific HR of Death or Deterioration")+
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+
+spline_death
+```
+
+
+```{r}
+predict_coxme <- function(object, 
+                          newdata = NULL, 
+                          type = c("lp", "risk"), 
+                          se.fit = FALSE,
+                          strata_ref = TRUE){
+  
+  if (!inherits(object, 'coxme'))
+    stop("Primary argument much be a coxme object")
+  
+  type <- match.arg(type)
+  n <- object$n[2]
+  Terms <- delete.response(terms(object))
+  has_strata <- !is.null(attr(Terms, "specials")$strata) 
+  if (has_strata) 
+    has_strata <- ifelse(length(attr(Terms, "specials")$strata) == 0, FALSE, has_strata)
+  has_newdata  <- !is.null(newdata)
+  
+  if (!se.fit & type == "lp" & !has_newdata) return(object$linear.predictor)
+  
+  coef <- fixed.effects(object)
+  mf <- survival:::model.frame.coxph(object)
+  
+  # boot.ci
+  
+  
+  
+  if (has_newdata){
+    m <- model.frame(Terms, newdata)
+  } else {
+    m <- mf
+  }
+  
+  # if strata update terms
+  if (has_strata){
+    strata_terms <- untangle.specials(Terms, "strata")
+    Terms2 <- Terms[-strata_terms$terms]
+  } else {
+    Terms2 <- Terms
+  }
+  
+  if (has_newdata){
+    mm <- model.matrix(Terms2, m)
+    mm <- mm[ ,-1]
+  }
+  
+  # has strata and reference is strata
+  # calculate strata means
+  if (has_strata & strata_ref){
+    # Full model matrix
+    x <- model.matrix(Terms, data = mf)
+    
+    oldstrat <- mf[[strata_terms$vars]]
+    xmeans <- rowsum(x, oldstrat)/as.vector(table(oldstrat))
+  }
+  
+  if (!has_newdata){
+    # extract all cols in x which matches Terms
+    mm <- model.matrix(Terms2, data =mf)[ ,-1]
+    m <- mf
+  }
+  
+  if (has_strata & strata_ref){
+    newstrat <- m[[strata_terms$vars]]
+    mm <- mm - xmeans[match(newstrat, row.names(xmeans)), colnames(mm)]
+  } else {
+    mm <- mm - rep(object$means, each = nrow(m))
+  }
+  
+  # if (!has_newdata & !has_strata){
+  #   pred <- object$linear.predictor
+  # }
+  if (length(coef) == 1){
+    pred <- mm * coef
+  } else {
+    pred <- (mm %*% coef)
+  }
+  
+  
+  if (se.fit) se <- sqrt(rowSums((mm %*% vcov(object)) * mm))
+  if (type == "risk"){
+    pred <- exp(pred)
+    if (se.fit) se <- se * sqrt(pred)
+  }
+  if (se.fit) list(fit = pred, se.fit = se)
+  else pred
+}
 ```
 
