@@ -30,6 +30,7 @@ library(forestplot)
 library(gridExtra)
 library(pROC)
 library(coxme)
+
 ```
 
 ## Loading Data
@@ -583,6 +584,41 @@ tbl2 <- svm_death |> tbl_regression(exponentiate = TRUE, label = list(
     tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
   )
 
+  svm_causespecific <- coxph(Surv(survival_time,transplant_outcome) ~ SVM_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+
+svm_death_causespecific <- coxph(Surv(survival_time,death_outcome) ~ SVM_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+tbl3<- svm_causespecific |> 
+  tbl_regression(exponentiate = TRUE, label = list(
+    SVM_decile ~ "SVM Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+tbl4 <- svm_death_causespecific |> tbl_regression(exponentiate = TRUE, label = list(
+    SVM_decile ~ "SVM Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+
+  tbl_merge(
+    tbls = list(tbl3, tbl4),
+    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
+  )
 
 ```
 
@@ -592,8 +628,6 @@ SVI Transplant
 ```{r SVI crr transplant}
 
 svi <- crr(Surv(survival_time,status) ~ SVI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
-
-
 
 svi_death <- crr(Surv(survival_time,status) ~ SVI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM, failcode = "death/deteriorate")
 
@@ -629,7 +663,40 @@ tbl2 <- svi_death |> tbl_regression(exponentiate = TRUE, label = list(
   )
 
 
+svi_causespecific <- coxph(Surv(survival_time,transplant_outcome) ~ SVI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
 
+svi_death_causespecific <- coxph(Surv(survival_time,death_outcome) ~ SVI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+tbl3<- svi_causespecific |> 
+  tbl_regression(exponentiate = TRUE, label = list(
+    SVI_decile ~ "SVI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+tbl4 <- svi_death_causespecific |> tbl_regression(exponentiate = TRUE, label = list(
+    SVI_decile ~ "SVI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+
+  tbl_merge(
+    tbls = list(tbl3, tbl4),
+    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
+  )
 
 ```
 
@@ -673,6 +740,42 @@ tbl2 <- adi_death |> tbl_regression(exponentiate = TRUE, label = list(
     tbls = list(tbl1, tbl2),
     tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
   )
+  
+  adi_causespecific <- coxph(Surv(survival_time,transplant_outcome) ~ ADI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+
+adi_death_causespecific <- coxph(Surv(survival_time,death_outcome) ~ ADI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+tbl3<- adi_causespecific |> 
+  tbl_regression(exponentiate = TRUE, label = list(
+    ADI_decile ~ "ADI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+tbl4 <- adi_death_causespecific |> tbl_regression(exponentiate = TRUE, label = list(
+    ADI_decile ~ "ADI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+
+  tbl_merge(
+    tbls = list(tbl3, tbl4),
+    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
+  )
 
 ```
 
@@ -714,6 +817,43 @@ tbl2 <- dci_death |> tbl_regression(exponentiate = TRUE, label = list(
 
   tbl_merge(
     tbls = list(tbl1, tbl2),
+    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
+  )
+  
+  dci_causespecific <- coxph(Surv(survival_time,transplant_outcome) ~ DCI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+
+dci_death_causespecific <- coxph(Surv(survival_time,death_outcome) ~ DCI_decile + can_race + ethnicity +  CAN_GENDER + CAN_AGE_AT_LISTING + durable_LVAD +temporary_LVAD + RVAD + TAH + LVAD_RVAD + initial_status, data = heart_SVM)
+
+
+tbl3<- dci_causespecific |> 
+  tbl_regression(exponentiate = TRUE, label = list(
+    DCI_decile ~ "DCI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+tbl4 <- dci_death_causespecific |> tbl_regression(exponentiate = TRUE, label = list(
+    DCI_decile ~ "DCI Decile",
+    can_race ~ "Race",
+    ethnicity ~ "Ethnicity",
+    CAN_GENDER ~ "Sex",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    temporary_LVAD ~ "Temporary LVAD",
+    LVAD_RVAD ~ "LVAD + RVAD",
+    initial_status ~ "Initial Status"
+  )) |> 
+  modify_header(label = "") 
+
+  tbl_merge(
+    tbls = list(tbl3, tbl4),
     tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
   )
 
@@ -1259,127 +1399,6 @@ labs(
 grid.arrange(svm_cuminc, svi_cuminc, adi_cuminc, dci_cuminc, ncol=2, nrow = 2 )
 ```
 
-```{r}
-set.seed(1234)
-SVM_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-SVI_model_transplant<- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-ADI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-DCI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(dci_percentile)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-
-avg_patient <- tibble(
-  SVM_PERCENTILE = rep(seq(0,100)))
-avg_patient1 <- tibble(
-  SVI_percentile = rep(seq(0,100)))
-avg_patient2 <- tibble(
-  mean_ADI = rep(seq(0,100)))
-avg_patient3 <- tibble(
-  dci_percentile = rep(seq(0,100)))
-
-
-hazard_transplant_SVM <- predict_coxme(SVM_model_transplant, newdata = avg_patient, type = c("risk"))
-hazard_transplant_SVI <- predict_coxme(SVI_model_transplant, newdata = avg_patient1, type = c("risk"))
-hazard_transplant_ADI <- predict_coxme(ADI_model_transplant, newdata = avg_patient2, type = c("risk"))
-hazard_transplant_DCI <- predict_coxme(DCI_model_transplant, newdata = avg_patient3, type = c("risk"))
-
-
-
-change_basecase_to_first_percentile <- function(hazard_list){
-  log_haz_1st_SVM <- hazard_list[[52]]
-
-hazard_list<- hazard_list - log_haz_1st_SVM
-
-exp(hazard_list)
-  
-}
-hazard_transplant_SVM <- change_basecase_to_first_percentile(hazard_transplant_SVM)
-
-
-
-hazard_transplant_SVM <- change_basecase_to_first_percentile(hazard_transplant_SVM)
-hazard_transplant_SVI <- change_basecase_to_first_percentile(hazard_transplant_SVI)
-hazard_transplant_ADI <- change_basecase_to_first_percentile(hazard_transplant_ADI)
-hazard_transplant_DCI <- change_basecase_to_first_percentile(hazard_transplant_DCI)
-
-
-spline_transplant <- avg_patient |> 
-  cbind(hazard_transplant_SVM,
-        hazard_transplant_SVI,
-        hazard_transplant_ADI, 
-        hazard_transplant_DCI) |> 
-  ggplot()+
-  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_transplant_SVM, color = "SVM"), data = avg_patient) +
-    geom_smooth(aes(x=SVI_percentile, y = hazard_transplant_SVI, color = "SVI"), data = avg_patient1)+
-    geom_smooth(aes(x=mean_ADI, y = hazard_transplant_ADI, color = "ADI"), data = avg_patient2)+
-    geom_smooth(aes(x=dci_percentile, y = hazard_transplant_DCI, color = "DCI"), data = avg_patient3)+
-  xlab("SDoH Composite Score Percentile")+
-  ylab("Cause Specific HR of Transplant")+
-  theme(legend.title = element_blank(),
-        legend.position = "bottom")
-
-spline_transplant
-
-```
-
-```{r}
-set.seed(1234)
-SVM_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-SVI_model_death<- coxme(Surv(survival_time,death_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-ADI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-DCI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(dci_percentile)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
-
-avg_patient <- tibble(
-  SVM_PERCENTILE = rep(seq(0,100)))
-avg_patient1 <- tibble(
-  SVI_percentile = rep(seq(0,100)))
-avg_patient2 <- tibble(
-  mean_ADI = rep(seq(0,100)))
-avg_patient3 <- tibble(
-  dci_percentile = rep(seq(0,100)))
-
-
-hazard_death_SVM <- predict_coxme(SVM_model_death, newdata = avg_patient, type = c("risk"))
-hazard_death_SVI <- predict_coxme(SVI_model_death, newdata = avg_patient1, type = c("risk"))
-hazard_death_ADI <- predict_coxme(ADI_model_death, newdata = avg_patient2, type = c("risk"))
-hazard_death_DCI <- predict_coxme(DCI_model_death, newdata = avg_patient3, type = c("risk"))
-
-
-
-change_basecase_to_first_percentile <- function(hazard_list){
-  log_haz_1st_SVM <- hazard_list[[52]]
-
-hazard_list<- hazard_list - log_haz_1st_SVM
-
-exp(hazard_list)
-  
-}
-hazard_death_SVM <- change_basecase_to_first_percentile(hazard_death_SVM)
-
-
-
-hazard_death_SVM <- change_basecase_to_first_percentile(hazard_death_SVM)
-hazard_death_SVI <- change_basecase_to_first_percentile(hazard_death_SVI)
-hazard_death_ADI <- change_basecase_to_first_percentile(hazard_death_ADI)
-hazard_death_DCI <- change_basecase_to_first_percentile(hazard_death_DCI)
-
-
-spline_death <- avg_patient |> 
-  cbind(hazard_death_SVM,
-        hazard_death_SVI,
-        hazard_death_ADI, 
-        hazard_death_DCI) |> 
-  ggplot()+
-  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_death_SVM, color = "SVM"), data = avg_patient) +
-    geom_smooth(aes(x=SVI_percentile, y = hazard_death_SVI, color = "SVI"), data = avg_patient1)+
-    geom_smooth(aes(x=mean_ADI, y = hazard_death_ADI, color = "ADI"), data = avg_patient2)+
-    geom_smooth(aes(x=dci_percentile, y = hazard_death_DCI, color = "DCI"), data = avg_patient3)+
-  xlab("SDoH Composite Score Percentile")+
-  ylab("Cause Specific HR of Death or Deterioration")+
-  theme(legend.title = element_blank(),
-        legend.position = "bottom")
-
-spline_death
-```
-
 
 ```{r}
 predict_coxme <- function(object, 
@@ -1470,3 +1489,171 @@ predict_coxme <- function(object,
 }
 ```
 
+
+
+```{r}
+set.seed(1234)
+SVM_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+SVI_model_transplant<- coxme(Surv(survival_time,transplant_outcome) ~ rcs(SVI_percentile)  +  (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+ADI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(mean_ADI) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+DCI_model_transplant <- coxme(Surv(survival_time,transplant_outcome) ~ rcs(dci_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+
+
+
+avg_patient <- expand_grid(
+  SVM_PERCENTILE = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient1 <- expand_grid(
+  SVI_percentile = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient2 <- expand_grid(
+  mean_ADI = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient3 <- expand_grid(
+  dci_percentile = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+
+
+
+hazard_transplant_SVM <- predict_coxme(SVM_model_transplant, newdata = avg_patient, type = c("risk"))
+hazard_transplant_SVI <- predict_coxme(SVI_model_transplant, newdata = avg_patient1, type = c("risk"))
+hazard_transplant_ADI <- predict_coxme(ADI_model_transplant, newdata = avg_patient2, type = c("risk"))
+hazard_transplant_DCI <- predict_coxme(DCI_model_transplant, newdata = avg_patient3, type = c("risk"))
+
+
+spline_transplant <- avg_patient |> 
+  cbind(hazard_transplant_SVM,
+        hazard_transplant_SVI,
+        hazard_transplant_ADI, 
+        hazard_transplant_DCI) |> 
+  ggplot()+
+  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_transplant_SVM, color = "SVM"), data = avg_patient) +
+    geom_smooth(aes(x=SVI_percentile, y = hazard_transplant_SVI, color = "SVI"), data = avg_patient1)+
+    geom_smooth(aes(x=mean_ADI, y = hazard_transplant_ADI, color = "ADI"), data = avg_patient2)+
+    geom_smooth(aes(x=dci_percentile, y = hazard_transplant_DCI, color = "DCI"), data = avg_patient3)+
+  xlab("SDoH Composite Score Percentile")+
+  ylab("Cause Specific HR of Transplant")+
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+
+spline_transplant
+
+```
+
+```{r}
+set.seed(1234)
+SVM_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(SVM_PERCENTILE) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+SVI_model_death<- coxme(Surv(survival_time,death_outcome) ~ rcs(SVI_percentile) + (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+ADI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(mean_ADI)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+DCI_model_death <- coxme(Surv(survival_time,death_outcome) ~ rcs(dci_percentile)+ (1|CAN_LISTING_CTR_CD), data = heart_SVM)
+
+avg_patient <- expand_grid(
+  SVM_PERCENTILE = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient1 <- expand_grid(
+  SVI_percentile = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient2 <- expand_grid(
+  mean_ADI = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+avg_patient3 <- expand_grid(
+  dci_percentile = seq(0,100),
+  durable_LVAD = seq(0,1),
+  race = fct_unique(heart_SVM$can_race),
+  status = fct_unique(heart_SVM$initial_status),
+  ethnicity = fct_unique(heart_SVM$ethnicity),
+  gender = fct_unique(heart_SVM$CAN_GENDER),
+  age = median(heart_SVM$CAN_AGE_AT_LISTING),
+  t_LVAD = seq(0,1),
+  RVAD = seq(0,1),
+  TAH = seq(0,1),
+  LVAD_RVAD = seq(0,1))
+
+
+hazard_death_SVM <- predict_coxme(SVM_model_death, newdata = avg_patient, type = c("risk"))
+hazard_death_SVI <- predict_coxme(SVI_model_death, newdata = avg_patient1, type = c("risk"))
+hazard_death_ADI <- predict_coxme(ADI_model_death, newdata = avg_patient2, type = c("risk"))
+hazard_death_DCI <- predict_coxme(DCI_model_death, newdata = avg_patient3, type = c("risk"))
+
+
+
+spline_death <- avg_patient |> 
+  cbind(hazard_death_SVM,
+        hazard_death_SVI,
+        hazard_death_ADI, 
+        hazard_death_DCI) |> 
+  ggplot()+
+  geom_smooth(aes(x=SVM_PERCENTILE, y = hazard_death_SVM, color = "SVM"), data = avg_patient) +
+    geom_smooth(aes(x=SVI_percentile, y = hazard_death_SVI, color = "SVI"), data = avg_patient1)+
+    geom_smooth(aes(x=mean_ADI, y = hazard_death_ADI, color = "ADI"), data = avg_patient2)+
+    geom_smooth(aes(x=dci_percentile, y = hazard_death_DCI, color = "DCI"), data = avg_patient3)+
+  xlab("SDoH Composite Score Percentile")+
+  ylab("Cause Specific HR of Death or Deterioration")+
+  theme(legend.title = element_blank(),
+        legend.position = "bottom")
+
+spline_death
+```
