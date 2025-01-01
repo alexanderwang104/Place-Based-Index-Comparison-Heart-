@@ -516,6 +516,5 @@ ggplot(my_sf) +
 ## Merging plot
 
 ```{r}
-grid.arrange(transplant_plot, SVM_plot, SVI_plot, ADI_plot, DCI_plot, ncol = 5)
 grid.arrange(SVM_plot, SVI_plot, ADI_plot, DCI_plot, ncol = 4)
 ```
