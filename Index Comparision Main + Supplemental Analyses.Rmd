@@ -663,6 +663,7 @@ heart_SVM = heart_SVM %>% mutate(
     CAN_PRIMARY_PAY %in% c(14) ~ "US/State Govt Agency",
     CAN_PRIMARY_PAY %in% c(15) ~ "Unknown",
     TRUE ~ "Other"),
+  insurance = as.factor(insurance),
   education = case_when(
     CAN_EDUCATION == 1 ~ "None",
     CAN_EDUCATION == 2 ~ "Grade School (0-8)",
