@@ -727,7 +727,7 @@ heart_table = heart_SVM |>
   modify_table_body(filter, !(variable == "PX_ID" )) 
 
 heart_SVM |> 
-  select(CAN_AGE_AT_LISTING, CAN_GENDER, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, CAN_EDUCATION,  CAN_PRIMARY_PAY) |> 
+  select(CAN_AGE_AT_LISTING, CAN_GENDER, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, CAN_EDUCATION,  insurance) |> 
   group_by(PX_ID) |> 
   tbl_summary(label = list(
     can_race ~ "Race",
