@@ -575,7 +575,8 @@ heart_SVM <- heart_SVM |>
            CAN_INIT_STAT %in% c('1160', '2160') ~ "Status 6",
            CAN_INIT_STAT == 2999 ~ "inactive",
            .default = NA
-         ))
+         ),
+initial_status = as.factor(initial_status))
 ```
 
 
