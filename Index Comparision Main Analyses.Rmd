@@ -45,7 +45,7 @@ slice_head(cand_thor,n=5)
 
 ## ADI
 
-ADI is coded to the at the block level (12 digit FIPS), whereas the crosswalk document is only coded at the tract level (11 digit FIPS). Need to adjust accordingly. ADI from University of Wisconsin. Crosswalk document from US Department of Housing and Urban Dev.
+ADI is coded to the at the block level (12 digit FIPS), whereas the crosswalk document is only coded at the tract level (11 digit FIPS). Need to adjust accordingly. ADI from University of Wisconsin. Crosswalk document from US Department of Housing and Urban Development.
 
 ```{r}
 ADI <- read_csv("2021_ADI.csv")
@@ -396,8 +396,6 @@ Survival time defined as time to transplant, death, or removal from waitlist, wh
 
 ## Censoring
 
-Death or deterioration on the waitlist coded as the event (1). Transplant is the censoring event (0).
-
 ```{r censoring}
 cand_thor <- cand_thor |> 
   group_by(PX_ID) |> 
@@ -744,144 +742,6 @@ print(html_table, type = "html", file = "adi_heart_table.html")
 heart_adi_table
 ```
 
-## Variable Setup
-
-```{r SVM crr transplant}
-heart_SVM <- heart_SVM |> 
-  mutate(sex = case_when(
-    CAN_GENDER == "M" ~ 1,
-    CAN_GENDER == "F" ~ 0),
-    hispanic = case_when(
-      CAN_ETHNICITY_SRTR == "LATINO" ~ 1,
-      CAN_ETHNICITY_SRTR == "NLATIN" ~ 0,
-      .default = NA),
-    initial_status_numeric = case_when(
-      CAN_INIT_STAT %in% c('1010', '1020', '1090', '1110', '2010', '2020', '2090', '2110', '3010', '6010', '6011', '6012', '9010') ~ 1,
-           CAN_INIT_STAT %in% c('1030', '1120', '2030', '2120', '6002', '6020', '6030', '9020') ~ 2,
-           CAN_INIT_STAT %in% c('1130', '2130', '6040') ~ 3,
-           CAN_INIT_STAT %in% c('1140', '2140', '6004') ~ 4,
-           CAN_INIT_STAT %in% c('1150', '2150') ~ 5,
-           CAN_INIT_STAT %in% c('1160', '2160') ~ 6,
-           .default = NA),
-    status_numeric = case_when(
-      status == "censor" ~ 0,
-      status == "transplant" ~ 1,
-      status == "death" ~ 2,
-      status == "removed" ~ 3
-    ))
-```
-
-## Regression Models
-
-
-## SVM CRR stratified by center 
-
-```{r svm crrs prep, echo = TRUE, results = 'hide' }
-cov.test <- model.matrix(~ factor(heart_SVM$svm_decile) +
-                  heart_SVM$durable_LVAD +
-                  factor(heart_SVM$can_race) +
-                  heart_SVM$sex +
-                  heart_SVM$hispanic +
-                  heart_SVM$CAN_AGE_AT_LISTING +
-                  heart_SVM$temporary_LVAD +
-                  heart_SVM$RVAD +
-                  heart_SVM$TAH +
-                  heart_SVM$LVAD_RVAD + 
-                  factor(heart_SVM$initial_status_numeric))[,-1]
-cov.test <- cov.test[complete.cases(cov.test), ]
-complete_cases <- heart_SVM[complete.cases(heart_SVM[, c("svm_decile", "durable_LVAD", "can_race", "sex", "hispanic", "CAN_AGE_AT_LISTING", "temporary_LVAD", "RVAD", "TAH", "LVAD_RVAD", "initial_status_numeric")]), ]
-```
-
-1-9 = 2-10 decile
-10= durable lvad
-11 - 15 = race (other, black, asian, native american, native Hawaiian)
-16 - sex
-17 - hispanic
-18 - age
-19 - temporary lvad
-20 - rvad
-21 - tah
-22 - lvad rvad
-23-27 = status (2-6)
-
-
-```{r svm crrs}
-svm_crrs <- crrs(ftime = complete_cases$survival_time, fstatus = complete_cases$status_numeric, cov1 = cov.test, strata = complete_cases$CAN_LISTING_CTR_CD, ctype = 1)
-svm_crrs
-```
-
-## SVI CRR stratified by center Z
-
-```{r svi crrs prep, echo = TRUE, results = 'hide' }
-cov.test <- model.matrix(~ factor(heart_SVM$svi_decile) +
-                  heart_SVM$durable_LVAD +
-                  factor(heart_SVM$can_race) +
-                  heart_SVM$sex +
-                  heart_SVM$hispanic +
-                  heart_SVM$CAN_AGE_AT_LISTING +
-                  heart_SVM$temporary_LVAD +
-                  heart_SVM$RVAD +
-                  heart_SVM$TAH +
-                  heart_SVM$LVAD_RVAD + 
-                  factor(heart_SVM$initial_status_numeric))[,-1]
-cov.test <- cov.test[complete.cases(cov.test), ]
-complete_cases <- heart_SVM[complete.cases(heart_SVM[, c("svi_decile", "durable_LVAD", "can_race", "sex", "hispanic", "CAN_AGE_AT_LISTING", "temporary_LVAD", "RVAD", "TAH", "LVAD_RVAD", "initial_status_numeric")]), ]
-```
-
-```{r svi crrs}
-svi_crrs <- crrs(ftime = complete_cases$survival_time, fstatus = complete_cases$status_numeric, cov1 = cov.test, strata = complete_cases$CAN_LISTING_CTR_CD, ctype = 1)
-svi_crrs
-
-```
-
-
-## ADI CRR stratified by center Z
-
-```{r adi crrs prep, echo = TRUE, results = 'hide' }
-cov.test <- model.matrix(~ factor(heart_SVM$adi_decile) +
-                  heart_SVM$durable_LVAD +
-                  factor(heart_SVM$can_race) +
-                  heart_SVM$sex +
-                  heart_SVM$hispanic +
-                  heart_SVM$CAN_AGE_AT_LISTING +
-                  heart_SVM$temporary_LVAD +
-                  heart_SVM$RVAD +
-                  heart_SVM$TAH +
-                  heart_SVM$LVAD_RVAD + 
-                  factor(heart_SVM$initial_status_numeric))[,-1]
-cov.test <- cov.test[complete.cases(cov.test), ]
-complete_cases <- heart_SVM[complete.cases(heart_SVM[, c("adi_decile", "durable_LVAD", "can_race", "sex", "hispanic", "CAN_AGE_AT_LISTING", "temporary_LVAD", "RVAD", "TAH", "LVAD_RVAD", "initial_status_numeric")]), ]
-```
-
-```{r adi crrs}
-adi_crrs <- crrs(ftime = complete_cases$survival_time, fstatus = complete_cases$status_numeric, cov1 = cov.test, strata = complete_cases$CAN_LISTING_CTR_CD, ctype = 1)
-adi_crrs
-```
-
-
-## DCI CRR stratified by center Z
-
-```{r dci crrs prep, echo = TRUE, results = 'hide' }
-cov.test <- model.matrix(~ factor(heart_SVM$dci_decile) +
-                  heart_SVM$durable_LVAD +
-                  factor(heart_SVM$can_race) +
-                  heart_SVM$sex +
-                  heart_SVM$hispanic +
-                  heart_SVM$CAN_AGE_AT_LISTING +
-                  heart_SVM$temporary_LVAD +
-                  heart_SVM$RVAD +
-                  heart_SVM$TAH +
-                  heart_SVM$LVAD_RVAD + 
-                  factor(heart_SVM$initial_status_numeric))[,-1]
-cov.test <- cov.test[complete.cases(cov.test), ]
-complete_cases <- heart_SVM[complete.cases(heart_SVM[, c("dci_decile", "durable_LVAD", "can_race", "sex", "hispanic", "CAN_AGE_AT_LISTING", "temporary_LVAD", "RVAD", "TAH", "LVAD_RVAD", "initial_status_numeric")]), ]
-```
-
-
-```{r dci crrs}
-dci_crrs <- crrs(ftime = complete_cases$survival_time, fstatus = complete_cases$status_numeric, cov1 = cov.test, strata = complete_cases$CAN_LISTING_CTR_CD, ctype = 1)
-dci_crrs
-```
 
 #impute missing height and weight
 ```{r}
@@ -894,7 +754,7 @@ heart_SVM$CAN_WGT_KG[is.na(heart_SVM$CAN_WGT_KG)] <-median(heart_SVM$CAN_WGT_KG,
 
 
  
-SVM Fine-Gray CRR - unadjusted
+Fine-Gray CRR - unadjusted
 
 ```{r}
 svm_un =  crr(Surv(survival_time,status) ~ SVM_decile, data = heart_SVM)
@@ -1024,6 +884,7 @@ adi_tidy_death_full = adi_death_full$tidy
 dci_tidy_death_full = dci_death_full$tidy
 ```
 #save model results for supplement
+#Supplemental Tables 1-24
 ```{r}
 
 save_df_as_html <- function(data, file_name) {
@@ -1038,188 +899,33 @@ save_df_as_html <- function(data, file_name) {
   message("HTML table saved as ", file_name)
 }
 
-save_df_as_html(svm_tidy_un, "svm_table_un.html")
-save_df_as_html(svi_tidy_un, "svi_table_un.html")
-save_df_as_html(adi_tidy_un, "adi_table_un.html")
-save_df_as_html(dci_tidy_un, "dci_table_un.html")
-save_df_as_html(svm_tidy_death_un, "svm_table_death_un.html")
-save_df_as_html(svi_tidy_death_un, "svi_table_death_un.html")
-save_df_as_html(adi_tidy_death_un, "adi_table_death_un.html")
-save_df_as_html(dci_tidy_death_un, "dci_table_death_un.html")
+save_df_as_html(svm_tidy_un, "svm_table_un.html") # Supplemental Table 1
+save_df_as_html(svi_tidy_un, "svi_table_un.html") # Supplemental Table 2
+save_df_as_html(adi_tidy_un, "adi_table_un.html") # Supplemental Table 3
+save_df_as_html(dci_tidy_un, "dci_table_un.html") # Supplemental Table 4
+save_df_as_html(svm_tidy_death_un, "svm_table_death_un.html") # Supplemental Table 5
+save_df_as_html(svi_tidy_death_un, "svi_table_death_un.html") # Supplemental Table 6
+save_df_as_html(adi_tidy_death_un, "adi_table_death_un.html") # Supplemental Table 7
+save_df_as_html(dci_tidy_death_un, "dci_table_death_un.html") # Supplemental Table 8
 
-save_df_as_html(svm_tidy_small, "svm_table_small.html")
-save_df_as_html(svi_tidy_small, "svi_table_small.html")
-save_df_as_html(adi_tidy_small, "adi_table_small.html")
-save_df_as_html(dci_tidy_small, "dci_table_small.html")
-save_df_as_html(svm_tidy_death_small, "svm_table_death_small.html")
-save_df_as_html(svi_tidy_death_small, "svi_table_death_small.html")
-save_df_as_html(adi_tidy_death_small, "adi_table_death_small.html")
-save_df_as_html(dci_tidy_death_small, "dci_table_death_small.html")
+save_df_as_html(svm_tidy_small, "svm_table_small.html") # Supplemental Table 9
+save_df_as_html(svi_tidy_small, "svi_table_small.html") # Supplemental Table 10
+save_df_as_html(adi_tidy_small, "adi_table_small.html") # Supplemental Table 11
+save_df_as_html(dci_tidy_small, "dci_table_small.html") # Supplemental Table 12
+save_df_as_html(svm_tidy_death_small, "svm_table_death_small.html") # Supplemental Table 13
+save_df_as_html(svi_tidy_death_small, "svi_table_death_small.html") # Supplemental Table 14
+save_df_as_html(adi_tidy_death_small, "adi_table_death_small.html") # Supplemental Table 15
+save_df_as_html(dci_tidy_death_small, "dci_table_death_small.html") # Supplemental Table 16
 
-save_df_as_html(svm_tidy_full, "svm_table_full.html")
-save_df_as_html(svi_tidy_full, "svi_table_full.html")
-save_df_as_html(adi_tidy_full, "adi_table_full.html")
-save_df_as_html(dci_tidy_full, "dci_table_full.html")
-save_df_as_html(svm_tidy_death_full, "svm_table_death_full.html")
-save_df_as_html(svi_tidy_death_full, "svi_table_death_full.html")
-save_df_as_html(adi_tidy_death_full, "adi_table_death_full.html")
-save_df_as_html(dci_tidy_death_full, "dci_table_death_full.html")
-
+save_df_as_html(svm_tidy_full, "svm_table_full.html") # Supplemental Table 17
+save_df_as_html(svi_tidy_full, "svi_table_full.html") # Supplemental Table 18
+save_df_as_html(adi_tidy_full, "adi_table_full.html") # Supplemental Table 19
+save_df_as_html(dci_tidy_full, "dci_table_full.html") # Supplemental Table 20
+save_df_as_html(svm_tidy_death_full, "svm_table_death_full.html") # Supplemental Table 21
+save_df_as_html(svi_tidy_death_full, "svi_table_death_full.html") # Supplemental Table 22
+save_df_as_html(adi_tidy_death_full, "adi_table_death_full.html") # Supplemental Table 23
+save_df_as_html(dci_tidy_death_full, "dci_table_death_full.html") # Supplemental Table 24
 svm_tidy_death_un
-```
-
-```{r svm tidy crr}
-
-
-
-tbl1<- svm |> 
-  tbl_regression(exponentiate = TRUE, label = list(
-    SVM_decile ~ "SVM Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-tbl2 <- svm_death |> tbl_regression(exponentiate = TRUE, label = list(
-    SVM_decile ~ "SVM Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-
-  tbl_merge(
-    tbls = list(tbl1, tbl2),
-    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
-  )
-
-```
-
-
-SVI Transplant
-
-```{r SVI crr transplant}
-
-tbl1<- svi |> 
-  tbl_regression(exponentiate = TRUE, label = list(
-    SVI_decile ~ "SVI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-tbl2 <- svi_death |> tbl_regression(exponentiate = TRUE, label = list(
-    SVI_decile ~ "SVI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-
-  tbl_merge(
-    tbls = list(tbl1, tbl2),
-    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
-  )
-
-
-```
-
-ADI Transplant
-
-```{r crr ADI transplant}
-
-
-
-tbl1<- adi |> 
-  tbl_regression(exponentiate = TRUE, label = list(
-    ADI_decile ~ "ADI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-tbl2 <- adi_death |> tbl_regression(exponentiate = TRUE, label = list(
-    ADI_decile ~ "ADI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-
-  tbl_merge(
-    tbls = list(tbl1, tbl2),
-    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
-  )
-  
-```
-
-DCI Transplant 
-
-```{r dci tidy crr}
-
-
-
-tbl1<- dci |> 
-  tbl_regression(exponentiate = TRUE, label = list(
-    DCI_decile ~ "DCI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-tbl2 <- dci_death |> tbl_regression(exponentiate = TRUE, label = list(
-    DCI_decile ~ "DCI Decile",
-    can_race ~ "Race",
-    ethnicity ~ "Ethnicity",
-    CAN_GENDER ~ "Sex",
-    CAN_AGE_AT_LISTING ~ "Age",
-    durable_LVAD ~ "Durable LVAD",
-    temporary_LVAD ~ "Temporary LVAD",
-    LVAD_RVAD ~ "LVAD + RVAD",
-    initial_status ~ "Initial Status"
-  )) |> 
-  modify_header(label = "") 
-
-  tbl_merge(
-    tbls = list(tbl1, tbl2),
-    tab_spanner = c("**Time to Transplant**", "**Time to Death or Deterioration**")
-  )
-  
 ```
 
 ## Figure 2: Cumulative Incidence Curves
@@ -1975,8 +1681,9 @@ dci_death_forest_full <- forest |>
   xlim(0.25, 2)+
   theme_classic()
 ```
-#SVM Forest plots
-```{r figure 3}
+# Supplemental Figure 2: SVM Transplant Forest Plot
+# Supplemental Figure 5: SVM Death Forest Plot
+```{r}
 grid.arrange(svm_forest_un,svm_forest_small, svm_forest_full, ncol =3, nrow = 1)
 
 grid.arrange(svm_death_forest_un, svm_death_forest_small, svm_death_forest_full, ncol=3, nrow = 1)
@@ -1987,7 +1694,8 @@ ggsave("svm_transplant.png", grid_tx, width = 12, height = 7)
 grid_death <- arrangeGrob(svm_death_forest_un, svm_death_forest_small, svm_death_forest_full, ncol=3, nrow = 1)
 ggsave("svm_death.png", grid_death, width = 12, height = 7)
 ```
-#SVI forest plots
+# Supplemental Figure 3: SVI Transplant Forest Plot
+# Supplemental Figure 6: SVI Death Forest Plot
 ```{r figure 3}
 grid.arrange(svi_forest_un,svi_forest_small, svi_forest_full, ncol =3, nrow = 1)
 grid.arrange(svi_death_forest_un, svi_death_forest_small, svi_death_forest_full, ncol=3, nrow = 1)
@@ -1998,7 +1706,8 @@ grid_death <- arrangeGrob(svi_death_forest_un, svi_death_forest_small, svi_death
 ggsave("svi_death.png", grid_death, width = 12, height = 7)
 
 ```
-#ADI forest plots
+# Figure 3: ADI Transplant Forest Plot
+# Figure 4: ADI Death Forest Plot
 ```{r figure 3}
 grid_tx <- arrangeGrob(adi_forest_un,adi_forest_small, adi_forest_full, ncol =3, nrow = 1)  # Arrange in a 2-column grid
 ggsave("adi_transplant.png", grid_tx, width = 12, height = 7)
@@ -2006,7 +1715,8 @@ grid_death <- arrangeGrob(adi_death_forest_un,adi_death_forest_small, adi_death_
 ggsave("adi_death.png", grid_death, width = 12, height = 7)
 ```
 
-#DCI forest plots
+# Supplemental Figure 4: DCI Transplant Forest Plot
+# Supplemental Figure 7: DCI Death Forest Plot
 ```{r figure 3}
 grid.arrange(dci_forest_un,dci_forest_small, dci_forest_full, ncol =3, nrow = 1)
 
@@ -2017,7 +1727,7 @@ ggsave("dci_transplant.png", grid_tx, width = 12, height = 7)
 grid_death <- arrangeGrob(dci_death_forest_un, dci_death_forest_small, dci_death_forest_full, ncol=3, nrow = 1)
 ggsave("dci_death.png", grid_death, width = 12, height = 7)
 ```
-
+# Durable LVAD usage by Decile
 ```{r}
 lvad_svm <- heart_SVM %>%
   group_by(svm_decile, durable_LVAD) %>%   # Group by decile and durable_LVAD
@@ -2086,7 +1796,7 @@ lvad_df <- lvad_df %>%
                values_to = "percent") # Set values to percent column
 lvad_df
 
-# Bar graph w/o facets
+# Bar graph w/o facets (Figure 5: Durable LVAD usage by Decile)
 lvad_df_visual <- 
   ggplot(lvad_df, aes(x = decile, y = percent, fill = index)) + # Set base
   geom_col(position = "dodge") + # Set columns side-by-side
