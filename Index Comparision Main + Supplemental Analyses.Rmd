@@ -644,7 +644,32 @@ heart_SVM = heart_SVM %>% mutate(
 )
 ```
 
+## Variable Setup
 
+```{r SVM crr transplant}
+heart_SVM <- heart_SVM |> 
+  mutate(sex = case_when(
+    CAN_GENDER == "M" ~ 1,
+    CAN_GENDER == "F" ~ 0),
+    hispanic = case_when(
+      CAN_ETHNICITY_SRTR == "LATINO" ~ 1,
+      CAN_ETHNICITY_SRTR == "NLATIN" ~ 0,
+      .default = NA),
+    initial_status_numeric = case_when(
+      CAN_INIT_STAT %in% c('1010', '1020', '1090', '1110', '2010', '2020', '2090', '2110', '3010', '6010', '6011', '6012', '9010') ~ 1,
+           CAN_INIT_STAT %in% c('1030', '1120', '2030', '2120', '6002', '6020', '6030', '9020') ~ 2,
+           CAN_INIT_STAT %in% c('1130', '2130', '6040') ~ 3,
+           CAN_INIT_STAT %in% c('1140', '2140', '6004') ~ 4,
+           CAN_INIT_STAT %in% c('1150', '2150') ~ 5,
+           CAN_INIT_STAT %in% c('1160', '2160') ~ 6,
+           .default = NA),
+    status_numeric = case_when(
+      status == "censor" ~ 0,
+      status == "transplant" ~ 1,
+      status == "death" ~ 2,
+      status == "removed" ~ 3
+    ))
+```
 
 ## Table 1: Cohort Characteristics
 
