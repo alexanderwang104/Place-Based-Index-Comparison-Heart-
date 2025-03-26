@@ -765,6 +765,11 @@ html_table <- xtable(tbl_html)
 library(xtable)
 print(html_table, type = "html", file = "adi_heart_table.html")
 
+tbl_html_heart <- as.data.frame(heart_table)
+html_table_heart <- xtable(tbl_html_heart)
+print(html_table_heart, type = "html", file = "full_sample_heart_table.html")
+
+heart_table
 heart_adi_table
 ```
 
@@ -954,7 +959,7 @@ save_df_as_html(dci_tidy_death_full, "dci_table_death_full.html") # Supplemental
 svm_tidy_death_un
 ```
 
-## Figure 2: Cumulative Incidence Curves
+## Figure 3: Cumulative Incidence Curves
 
 ```{r cumic curves}
 heart_SVM$statuscuminc <- factor(heart_SVM$status_numeric,
@@ -1732,13 +1737,16 @@ grid_death <- arrangeGrob(svi_death_forest_un, svi_death_forest_small, svi_death
 ggsave("svi_death.png", grid_death, width = 12, height = 7)
 
 ```
-# Figure 3: ADI Transplant Forest Plot
-# Figure 4: ADI Death Forest Plot
-```{r figure 3}
+
+# Figure 4: ADI Transplant/Death Forest Plot
+```{r figure 4}
 grid_tx <- arrangeGrob(adi_forest_un,adi_forest_small, adi_forest_full, ncol =3, nrow = 1)  # Arrange in a 2-column grid
 ggsave("adi_transplant.png", grid_tx, width = 12, height = 7)
 grid_death <- arrangeGrob(adi_death_forest_un,adi_death_forest_small, adi_death_forest_full, ncol =3, nrow = 1)
 ggsave("adi_death.png", grid_death, width = 12, height = 7)
+
+adi_death_and_tx <- grid.arrange(grid_tx, grid_death, ncol= 1, nrow = 2)
+ggsave("adi_death_transplant.png", adi_death_and_tx, width = 12, height = 14)
 ```
 
 # Supplemental Figure 4: DCI Transplant Forest Plot
@@ -1822,7 +1830,7 @@ lvad_df <- lvad_df %>%
                values_to = "percent") # Set values to percent column
 lvad_df
 
-# Bar graph w/o facets (Figure 5: Durable LVAD usage by Decile)
+# Bar graph w/o facets (Figure 2: Durable LVAD usage by Decile)
 lvad_df_visual <- 
   ggplot(lvad_df, aes(x = decile, y = percent, fill = index)) + # Set base
   geom_col(position = "dodge") + # Set columns side-by-side
