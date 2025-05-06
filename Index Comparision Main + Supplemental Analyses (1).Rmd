@@ -1,0 +1,1942 @@
+---
+title: "Compare Deprivation Index Heart"
+output: html_document
+date: "2024-05-23"
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(survival)
+library(haven)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(readr)
+library(consort)
+library(splines)
+library(readxl)
+library(rms)
+library(forcats)
+library(cmprsk)
+library(crrSC)
+library(sf)
+library(forestplot)
+library(gridExtra)
+library(pROC)
+library(coxme)
+library(tidycmprsk)
+library(xtable)
+```
+
+## Loading Data
+
+```{r data}
+cand_thor <- read_sas("./cand_thor.sas7bdat", NULL)
+stathist <- read_sas("./stathist_thor.sas7bdat")
+slice_head(cand_thor,n=5)
+```
+## ASsigning Scores to Zip codes
+
+## ADI
+
+ADI is coded to the at the block level (12 digit FIPS), whereas the crosswalk document is only coded at the tract level (11 digit FIPS). Need to adjust accordingly. ADI from University of Wisconsin. Crosswalk document from US Department of Housing and Urban Development.
+
+```{r}
+ADI <- read_csv("2021_ADI.csv")
+ADI_crosswalk <-read_excel("11_digit_FIPS_to_ZIP_crosswalk.xlsx")
+
+ADI$FIPS_11_digit <- substr(ADI$FIPS, 1, 11) 
+ADI <- left_join(ADI,
+                 select(ADI_crosswalk, TRACT, ZIP), 
+                 by = c("FIPS_11_digit" = "TRACT") )
+ADI <- ADI |> 
+  group_by(ZIP) |> 
+  mutate(mean_ADI = mean(as.numeric(ADI_NATRANK), na.rm = TRUE))
+ADI |> 
+  select(ZIP,  ADI_NATRANK, mean_ADI) |> 
+  slice_head(n = 10)
+ADI <- distinct(ADI, ZIP, .keep_all = TRUE)
+rm(ADI_crosswalk)
+
+```
+
+## SVI
+
+SVI codes missing data as -999. 
+
+```{r}
+SVI <- read_csv("SVI_2022_US.csv")
+SVI_crosswalk <- read_excel("11_digit_FIPS_to_ZIP_crosswalk.xlsx")
+
+SVI <- left_join(SVI, select(SVI_crosswalk, TRACT, ZIP), by = c("FIPS" = "TRACT"))
+SVI <- SVI |> 
+  select(ZIP, RPL_THEMES) 
+SVI <- SVI |> mutate(
+  RPL_THEMES = case_when(RPL_THEMES < 0 ~ NA, .default = RPL_THEMES))
+SVI <- SVI |> 
+  group_by(ZIP) |> 
+  mutate(SVI_percentile = mean(as.numeric(RPL_THEMES*100), na.rm = TRUE),
+         median_SVI = median(as.numeric(RPL_THEMES*100), na.rm = TRUE))
+SVI <- distinct(SVI, ZIP, .keep_all = TRUE)
+rm(SVI_crosswalk)
+slice_head(SVI, n=10) 
+
+
+```
+
+## SVM
+
+```{r}
+SVM_ZIP <- read_csv("SVM_ZIPCODE_SCORES_All States_All Counties_2024-01-23.csv")
+SVM_ZIP$zipcode <- substr(SVM_ZIP$ZIPCODE, start = 1, stop = 5)
+slice_head(SVM_ZIP,n= 5)
+
+```
+## DCI
+
+```{r}
+DCI <- read_excel("DCI-2017-2021-Scores-Only.xlsx")
+DCI <- DCI |> 
+  mutate(zip = as.character(`Zip Code`),
+         dci_percentile = `2017-2021 Final Distress Score`)
+slice_head(DCI, n = 5)
+```
+
+
+## Assign Deprivation Inidicies to Candidate ZIP Code
+
+```{r}
+cand_zip <- read_sas("canzip2403.sas7bdat", NULL)
+cand_zip$ZIP = substr(cand_zip$CAN_PERM_ZIP,1,5)
+cand_zip <- left_join(cand_zip, 
+                              select(SVM_ZIP, ZIPCODE, SVM_SCORE, SVM_PERCENTILE),
+                              by = c("ZIP" = "ZIPCODE"))
+cand_zip <-left_join(cand_zip, SVI, by = c("ZIP" = "ZIP"))
+cand_zip <- left_join(cand_zip, select(ADI, mean_ADI, ZIP), by = c("ZIP" = "ZIP"))
+cand_zip <- left_join(cand_zip, select(DCI, dci_percentile, zip), by = c("ZIP" = "zip"))
+rm(list = c("ADI", "SVI", "SVM_ZIP", "DCI"))
+
+slice_head(cand_zip,n= 5)
+```
+
+## Subet Cohort
+
+Only include patients added to the waitlist through 2019 or 2022.This allows us to observe everyone for at least 1 year this way. Only patients that are excluded are patients that are simultaneously listed for heart and lung.
+
+```{r}
+cand_pre = cand_thor %>% subset(CAN_LISTING_DT <= as.Date("2018-12-31"))
+cand_thor <- cand_thor |> 
+  subset(CAN_LISTING_DT >= as.Date("2019-01-01") & CAN_LISTING_DT <= as.Date("2022-12-31") & WL_ORG == "HR")
+
+```
+
+## VAD Type characterization
+
+Credit to Kevin L. (https://github.com/kevinlazenby/post_transplant_survival_new_policy/blob/main/function_definitions.Rmd), lines 427 - 460
+
+Durable LVADs (line 867) https://github.com/healthallocate/Heart-Continuous-Score/blob/main/6week_death_data_prep.Rmd
+
+
+```{r}
+cand_thor <- cand_thor |> 
+  mutate(VAD = case_when(
+        CAN_VAD_TY == 1 ~ paste0("None"),
+        CAN_VAD_TY == 2 ~ paste0("LVAD"),
+        CAN_VAD_TY == 3 ~ paste0("RVAD"),
+        CAN_VAD_TY == 4 ~ paste0("TAH"),
+        CAN_VAD_TY == 5 ~ paste0("LVAD+RVAD")),
+      
+      LVAD = case_when(
+        VAD == "LVAD" ~ 1,
+        TRUE ~ 0),
+      
+      durable_LVAD = case_when(
+        CAN_VAD1 %in% c('202', '205', '206', '207', '208', '209', '210', 
+                        '212', '213', '214', '223', '224', '233', '236', 
+                        '239', '240', '312', '313', '314', '315', '316', '319', '322', 
+                        '327', '330', '333', '334') | 
+          CAN_VAD2 %in%  c('202', '205', '206', '207', '208', '209', '210', 
+                        '212', '213', '214', '223', '224', '233', '236', 
+                        '239', '240', '312', '313', '314', '315', '316', '319', '322', 
+                        '327', '330', '333', '334') ~ 1,
+        TRUE ~ 0),
+
+      
+      temporary_LVAD = case_when(
+        durable_LVAD != 1 & !is.na(CAN_VAD1) ~ 1,
+        TRUE ~ 0),
+      
+      RVAD = case_when(
+        VAD == "RVAD" ~ 1,
+        (CAN_VAD_TY != 1 & !is.na(CAN_VAD_TY) & 
+       !(CAN_VAD1 %in% c('205', '236', '313', '330', '206', '208', '314', 
+                         '210', '319', '216', '305', '217', '306', '223', 
+                         '312', '224', '316', '230', '324', '231', '325', 
+                         '232', '326', '233', '327'))) ~ 1,
+        TRUE ~ 0),
+      
+      TAH = case_when(
+        VAD == "TAH" ~ 1,
+        TRUE ~ 0),
+      
+      LVAD_RVAD = case_when(
+        VAD == "LVAD+RVAD" ~ 1,
+        TRUE ~ 0))
+  
+      
+```
+
+```{r}
+cand_thor <- cand_thor %>% ##cand_thor has same cohort, adds waitlist_end_date column
+  mutate(waitlist_end_date = case_when(
+    is.na(REC_TX_DT) == FALSE ~ REC_TX_DT, ##look at transplant date first
+    is.na(CAN_REM_DT) == FALSE ~ CAN_REM_DT, ##then look at removal date
+    is.na(CAN_LAST_INACT_STAT_DT) == FALSE & CAN_LAST_INACT_STAT_DT > CAN_LAST_ACT_STAT_DT ~ CAN_LAST_INACT_STAT_DT,##then inactive date if after last active date
+    !is.na(CAN_LAST_ACT_STAT_DT) ~ CAN_LAST_ACT_STAT_DT, ##then last active
+    is.na(CAN_LAST_ACT_STAT_DT) & !is.na(CAN_LAST_INACT_STAT_DT) ~ CAN_LAST_INACT_STAT_DT,
+    TRUE ~ CAN_LAST_ACT_STAT_DT)) ##if all else fails, use last active date
+
+```
+
+##single registrations - new columns num_list, min_list_date, wait_time, outcome
+
+```{r}
+single_registrations <- cand_thor %>%
+  group_by(PERS_ID) %>% ##grouping by PERS_ID - ?
+  mutate(num_list = n()) %>%
+  filter(num_list == 1) %>%
+  ungroup() %>%
+  mutate(min_list_date = CAN_LISTING_DT,  
+         wait_time = waitlist_end_date - min_list_date, ##using end dates established in last code chunk
+         outcome = case_when(
+           DON_TY == "C" ~ "transplanted",
+           !is.na(CAN_REM_CD) ~ "removed/died",  ##do we want all other CAN_REM_CD codes here? or just 8 and 13 (like used to define the outcome below)
+           TRUE ~ "censored"
+         ))
+
+```
+
+##multiple registrations - new columns num_list, list_type (concurrent or sequential), num_tx; fills missing REC_TX_DT
+
+```{r}
+multiple_registrations <- cand_thor %>%
+  filter(!PX_ID %in% single_registrations$PX_ID) %>%
+  group_by(PERS_ID) %>%
+  arrange(PERS_ID, CAN_LISTING_DT) %>%
+  mutate(num_list = n())
+
+candidates_w_multiple_registrations <- multiple_registrations %>% pull(PERS_ID) %>% unique() %>% length() ##number of candidates with multiple registrations
+
+avg_num_registrations_multiple <- mean(multiple_registrations %>% group_by(PERS_ID) %>% filter(row_number() == 1) %>% pull(num_list)) ##for candidates with multiple registrations, the average number of registrations
+
+multiple_registrations <- multiple_registrations %>%
+  mutate(list_type = case_when(
+    CAN_LISTING_DT < lag(waitlist_end_date) ~ "concurrent",
+    waitlist_end_date > lead(CAN_LISTING_DT) ~ "concurrent",
+    TRUE ~ "sequential")) %>%
+  mutate(REC_TX_DT = as.Date(REC_TX_DT)) %>%
+  mutate(num_tx = length(unique(na.omit(REC_TX_DT)))) %>%
+  fill(REC_TX_DT, .direction='downup') ##this line is causing issues with negative dial_time values
+```
+
+```{r}
+multiple_registrations <- multiple_registrations[order(multiple_registrations$PERS_ID, multiple_registrations$waitlist_end_date), ] ##orders by PERS_ID then waitlist_end_date
+
+##multiple registrations - number sequential transplants, correct concurrent listing transplant dates
+
+multiple_registrations$transplant_num <- 1 ##new column transplant_num, setting all at 1 for now
+for (i in 2:nrow(multiple_registrations)) {
+  if (!is.na(multiple_registrations$PERS_ID[i-1]) && 
+      !is.na(multiple_registrations$PERS_ID[i]) && 
+      !is.na(multiple_registrations$REC_TX_DT[i-1]) && 
+      !is.na(multiple_registrations$REC_TX_DT[i]) &&
+      multiple_registrations$PERS_ID[i-1] == multiple_registrations$PERS_ID[i] &&
+      multiple_registrations$REC_TX_DT[i-1] != multiple_registrations$REC_TX_DT[i]) {
+    
+    multiple_registrations$transplant_num[i] = multiple_registrations$transplant_num[i-1] + 1
+  }
+}
+
+for (i in 2:nrow(multiple_registrations)) {
+  if (!is.na(multiple_registrations$PERS_ID[i-1]) && 
+      !is.na(multiple_registrations$PERS_ID[i]) && 
+      multiple_registrations$PERS_ID[i-1] == multiple_registrations$PERS_ID[i] &&
+      !is.na(multiple_registrations$transplant_num[i-1]) && 
+      multiple_registrations$transplant_num[i-1] != multiple_registrations$transplant_num[i] &&
+      multiple_registrations$transplant_num[i-1] != 1) {
+    
+    multiple_registrations$transplant_num[i] = multiple_registrations$transplant_num[i-1]
+  }
+}
+
+multiple_registrations$transplant_num[multiple_registrations$list_type == 'sequential'] <- 0 ##when list_type is sequential, transplant_num is set to 0. I still don't understand this step either.
+
+for(i in 1:(nrow(multiple_registrations)-1)) { ##loop from second to lat row
+  if(multiple_registrations$PERS_ID[i] == multiple_registrations$PERS_ID[i+1] &
+     multiple_registrations$list_type[i] == 'concurrent' & multiple_registrations$list_type[i+1] == 'concurrent' &
+     !is.na(multiple_registrations$REC_TX_DT[i]) & !is.na(multiple_registrations$REC_TX_DT[i+1]) &
+     multiple_registrations$REC_TX_DT[i] < multiple_registrations$REC_TX_DT[i+1] ) {
+    
+    multiple_registrations$REC_TX_DT[i] <- multiple_registrations$REC_TX_DT[i+1] ##if PERS_ID is the same as the NEXT row, both have concurrent listings, transplant dates for both are not NA, and transplant date is earlier than the next row's transplant date - update to next row's transplant date
+  }}
+
+sequential_lists <- multiple_registrations %>%
+  filter(list_type == "sequential") %>%
+  mutate(min_list_date = CAN_LISTING_DT,
+         wait_time = waitlist_end_date - min_list_date,
+         outcome = case_when(
+           DON_TY == "C" ~ "transplanted",
+           is.na(CAN_REM_CD) == FALSE ~ "removed/died", ##again, should this be all CAN_REM_CD? or just 8 and 13 (since we included the rest in censored)
+           TRUE ~ "censored"
+         ))  ##same thing as done above for single registrations
+
+max_retransplants <- max(multiple_registrations$transplant_num) ##highest number of transplants for a single person
+
+multiple_registrations <- multiple_registrations %>% ##for candidates with multiple registrations, adds columns min_list_date, wait_time
+  group_by(PERS_ID, transplant_num) %>%
+  mutate(min_list_date = min(CAN_LISTING_DT, na.rm=T),
+         wait_time = waitlist_end_date - min_list_date)
+
+multiple_registrations <- multiple_registrations %>% mutate
+
+collapsed_concurrent_registrations <- NULL ##establishes object to store coming data
+for(i in 1:max_retransplants) { ##loop from first row to max_transplants
+  
+  collapsed_concurrent_registrations <- rbind(collapsed_concurrent_registrations, 
+        
+  multiple_registrations %>%
+    filter(list_type == "concurrent" & transplant_num == i) %>% ##filters for concurrent listings where translpant_num is equal to current value of i (?)
+    mutate(DON_TY = ifelse(DON_TY == "", NA, DON_TY),
+           last_wait_date = max(waitlist_end_date, na.rm = TRUE)) %>% ##if DON_TY is empty, fill with NA, set last_wait_date to waitlist_end_date (why?)
+    fill(REC_TX_DT, .direction = "up") %>%
+    fill(DON_TY, .direction = "up") %>%
+    fill(DONOR_ID, .direction = "up") %>%
+    fill(CAN_REM_CD, .direction = "up") %>% ##fills missing values upwards
+    mutate(wait_time = case_when(
+      is.na(REC_TX_DT) == FALSE & transplant_num != '0' ~ REC_TX_DT- min_list_date, ### Ignore non-transplanted rows
+      TRUE ~ last_wait_date - min_list_date),
+      outcome = case_when(
+        DON_TY == "C" ~ "DDKT",
+        DON_TY == "L" ~ "LDKT",
+        is.na(CAN_REM_CD) == FALSE ~ "removed/died", ##same question - CAN_REM_CD should be all? or just 8, 13?
+        TRUE ~ "censored")   ##does the same we already did for single registrations and sequential listings
+    ) %>%
+    select(-c(waitlist_end_date, CAN_LISTING_DT, CAN_REM_DT)) %>% ##drops columns waitlist_end_date, CAN_LISTING_DT, CAN_REM_DT (just for cleanliness?)
+    filter(row_number() ==1) %>% ##for concurrent listings, keeps only first row 
+    
+    mutate(last_wait_date = case_when(
+      REC_TX_DT < last_wait_date ~ REC_TX_DT,
+      TRUE ~last_wait_date)))}
+```
+
+##recreate CAN_LISTING_DT - to fix issue of NA values later on
+
+```{r}
+collapsed_concurrent_registrations <- collapsed_concurrent_registrations %>% mutate(CAN_LISTING_DT = min_list_date)
+```
+
+##recombine separated data frames
+
+```{r}
+cand_thor <- bind_rows(single_registrations %>% ungroup(), 
+                          sequential_lists %>% ungroup(), 
+                          collapsed_concurrent_registrations %>% ungroup()) ##puts data all back together
+
+cand_thor %>% filter(is.na(CAN_LISTING_DT))
+
+```
+
+## Intervals
+
+Credit to Kevin Z. in USCRS score (lines 511 - 538)
+https://github.com/healthallocate/Heart-Continuous-Score/blob/main/6week_death_data_prep.Rmd
+
+
+```{r intervals}
+ 
+cand_thor <- cand_thor |> 
+  mutate(
+    transplant_cand_thor = case_when(!is.na(REC_TX_DT) | CAN_REM_CD == '4' ~ 1,
+      TRUE ~ 0),
+    start_date = as.Date(CAN_LISTING_DT),
+    transplant_date = as.Date(REC_TX_DT),
+    removal_date = as.Date(CAN_REM_DT),
+    last_active_date = as.Date(CAN_LAST_ACT_STAT_DT),
+    last_inactive_date = as.Date(CAN_LAST_INACT_STAT_DT),
+    death_date = as.Date(CAN_DEATH_DT),
+    death_date_max = pmax(CAN_DEATH_DT, PERS_SSA_DEATH_DT, PERS_OPTN_DEATH_DT, na.rm=T)) %>%
+  
+  mutate(transplant_time = ifelse(!is.na(transplant_date), 
+                                  as.numeric(transplant_date - start_date, units='days'), NA)) %>%
+  mutate(death_time = ifelse(!is.na(death_date_max), as.numeric(death_date_max - start_date, units='days'), NA)) %>%
+  mutate(removal_time = as.numeric(pmax(removal_date, last_active_date, last_inactive_date, na.rm = T) - 
+                                     start_date, units='days'))
+```
+
+## Survival time
+
+Survival time defined as time to transplant, death, or removal from waitlist, whichever comes first. Units = days (from previous code)
+
+```{r survival time}
+ cand_thor <- 
+  cand_thor |> 
+  mutate(
+    survival_time = pmin(transplant_time, death_time, removal_time, na.rm = TRUE),
+    survival_time = case_when(
+      survival_time > 1095 ~ 1095,
+      .default = survival_time
+    ))
+```
+
+## Censoring
+
+```{r censoring}
+cand_thor <- cand_thor |> 
+  group_by(PX_ID) |> 
+    mutate(status = case_when(
+      survival_time == 1095 ~ 0, 
+      survival_time == death_time ~ 2,
+      survival_time == transplant_time  ~ 1,
+      !is.na(CAN_REM_CD) & !(CAN_REM_CD %in% c(4,8)) ~ 3,
+      .default = 0
+      ))
+
+cand_thor$status <- factor(cand_thor$status,
+                           levels = c(0,1,2,3),
+                           labels = c("censor",  "transplant","death", "removal"))
+
+cand_thor %>% filter(status != "death/deteriorate" & CAN_REM_CD == 8) %>% select(survival_time, death_time, status)
+
+```
+
+Cause Specific Hazard setup
+
+```{r}
+cand_thor <- cand_thor |> 
+  mutate(transplant_outcome = case_when(
+    status == "censor" ~ 0,
+    status == "transplant" ~ 1,
+    .default = 0),
+    death_outcome = case_when(
+      status == "censor" ~ 0,
+      status == "death" ~ 1,
+      .default = 0
+    ))
+```
+
+## Figure 1: STROBE/CONSORT Diagram
+
+Inclusion and exclusion criteria Strobe diagram
+
+```{r}
+pre_period_pers = cand_pre$PERS_ID
+
+cand_thor <- cand_thor %>%
+  group_by(PERS_ID) %>%
+  mutate(
+    eligibility = case_when(
+      PERS_ID %in% pre_period_pers | row_number() != 1 ~ "Not the first record for candidate",
+      CAN_AGE_AT_LISTING < 18 ~ "Pediatric candidates",
+      CAN_LISTING_DT == CAN_DEATH_DT ~ "Candidate listed and died same day",
+      .default = NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    durable_LVAD_table1 = case_when(
+      is.na(eligibility) & durable_LVAD == 1 ~ "Durable LVAD",
+      is.na(eligibility) & durable_LVAD == 0 ~ "No Durable LVAD",
+      .default = NA
+    ),
+    status_table1 = case_when(
+      status == "censor" ~ "On waitlist at end of follow-up",
+      status == "transplant" ~ "Received transplant",
+      status == "death" ~ "Died",
+      status == "removal" ~ "Removed"
+    )
+  )
+
+txt <- gen_text(rep("Heart transplant candidate registrations, 2019-2022", 19392))
+p_cons <- add_box(txt = txt)
+
+# Get unique values from eligibility, excluding "Multiple listings" 
+# to avoid additional count for this label
+unique_eligibility <- cand_thor$eligibility
+unique_eligibility <- c(unique_eligibility, rep("Multiple Listings", 220))
+# Combine custom text with the remaining eligibility items
+
+
+# Generate text without automatic count for "Multiple listings"
+txt <- gen_text(unique_eligibility, label = "Excluded", bullet = TRUE)
+
+# Add the customized text to the side box
+p_cons <- add_side_box(p_cons, txt = txt)
+
+p_cons <- add_box(p_cons, txt = gen_text(cand_thor$durable_LVAD_table1, label = "Adult candidate registrations"))
+
+## Creating Analytic Sample 
+cand_thor <- cand_thor |> 
+ subset(is.na(eligibility))
+
+txt <- gen_text(cand_thor$status_table1, bullet = TRUE)
+p_cons <- add_box(p_cons, txt = txt, just = "left")
+
+
+plot(p_cons, grViz = TRUE)
+
+```
+
+
+## Assigning Deprivation Indices based on Patient's permanent zip
+
+
+```{r center scores}
+heart_SVM <- left_join(cand_thor,
+                    select(cand_zip,SVM_SCORE, SVM_PERCENTILE, PX_ID, SVI_percentile, mean_ADI, dci_percentile), 
+                    by = c("PX_ID" = "PX_ID"))
+```
+
+## Imputing median score
+
+
+
+```{r}
+heart_SVM <- heart_SVM %>%
+  mutate(SVM_PERCENTILE = as.numeric(as.character(SVM_PERCENTILE)), # SVM
+         SVI_percentile = as.numeric(as.character(SVI_percentile)), # SVI
+         mean_ADI = as.numeric(as.character(mean_ADI)), # ADI
+         dci_percentile = as.numeric(as.character(dci_percentile))) # DCI
+
+# Use median score from transplant center listed at for candidates missing score percentile
+heart_SVM <- heart_SVM %>%
+  group_by(CAN_LISTING_CTR_CD) %>% # Gather by transplant center
+  mutate(median_SVM = median(SVM_PERCENTILE, na.rm = T), # Median SVM of each transplant center
+         median_SVI = median(SVI_percentile, na.rm = T), # Median SVI of each transplant center
+         median_ADI = median(mean_ADI, na.rm = T), # Median ADI of each transplant center
+         median_DCI = median(dci_percentile, na.rm = T), # Median DCI of each transplant center
+         SVM_PERCENTILE = ifelse(is.na(SVM_PERCENTILE), median_SVM, SVM_PERCENTILE), #conditional to input corresponding composite score value
+         SVI_percentile = ifelse(is.na(SVI_percentile), median_SVI, SVI_percentile),  #conditional to input corresponding composite score value
+         mean_ADI = ifelse(is.na(mean_ADI), median_ADI, mean_ADI),  #conditional to input corresponding composite score value
+         dci_percentile = ifelse(is.na(dci_percentile), median_DCI, dci_percentile))  #conditional to input corresponding composite score value
+# Split Percentiles into Deciles
+heart_SVM <- heart_SVM %>% 
+  group_by(PX_ID) %>%
+  mutate(SVM_decile = 
+           cut(SVM_PERCENTILE, c(-Inf, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100), labels = c("1st Decile", "2nd Decile", "3rd Decile", "4th Decile", "5th Decile", "6th Decile", "7th Decile", "8th Decile", "9th Decile", "10th Decile")),
+           SVI_decile = cut(SVI_percentile, c(-Inf, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100), labels = c("1st Decile", "2nd Decile", "3rd Decile", "4th Decile", "5th Decile", "6th Decile", "7th Decile", "8th Decile", "9th Decile", "10th Decile")),
+           ADI_decile = cut(mean_ADI,c(-Inf, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100), labels = c("1st Decile", "2nd Decile", "3rd Decile", "4th Decile", "5th Decile", "6th Decile", "7th Decile", "8th Decile", "9th Decile", "10th Decile")),
+         DCI_decile = cut(dci_percentile,c(-Inf, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100), labels = c("1st Decile", "2nd Decile", "3rd Decile", "4th Decile", "5th Decile", "6th Decile", "7th Decile", "8th Decile", "9th Decile", "10th Decile")))
+heart_SVM <- heart_SVM |> 
+  mutate(svm_decile = as.numeric(SVM_decile),
+        svi_decile = as.numeric(SVI_decile),
+        adi_decile = as.numeric(ADI_decile),
+        dci_decile = as.numeric(DCI_decile))
+```
+
+
+
+
+## Covariates
+
+```{r covariates}
+heart_SVM <- heart_SVM |> 
+  mutate(can_race = case_when(
+    CAN_RACE == "8" ~ "White",
+    CAN_RACE == "16" ~ "Black or African American",
+    CAN_RACE == "32" ~ "American Indian or Alaska Native",
+    CAN_RACE == "64" ~ "Asian",
+    CAN_RACE == "128" ~ "Native Hawaiian or Other Pacific Islander",
+    CAN_RACE == "256" ~ "Arab or Middle Eastern",
+    .default = "Other"),
+    can_race = as.factor(can_race),
+    ethnicity = case_when(
+      CAN_ETHNICITY_SRTR == "NLATIN" ~ "Not Latinx",
+      CAN_ETHNICITY_SRTR == "LATINO" ~ "Latinx"
+      
+    ),
+    ethnicity = as.factor(ethnicity))
+heart_SVM$can_race <- relevel(heart_SVM$can_race, ref = "White")
+heart_SVM$ethnicity <- relevel(heart_SVM$ethnicity, ref = "Not Latinx")
+heart_SVM <- heart_SVM |> 
+  mutate(initial_status = case_when(
+           CAN_INIT_STAT %in% c('1010', '1020', '1090', '1110', '2010', '2020', '2090', '2110', '3010', '6010', '6011', '6012', '9010') ~ "Status 1",
+           CAN_INIT_STAT %in% c('1030', '1120', '2030', '2120', '6002', '6020', '6030', '9020') ~ "Status 2",
+           CAN_INIT_STAT %in% c('1130', '2130', '6040') ~ "Status 3",
+           CAN_INIT_STAT %in% c('1140', '2140', '6004') ~ "Status 4",
+           CAN_INIT_STAT %in% c('1150', '2150') ~ "Status 5",
+           CAN_INIT_STAT %in% c('1160', '2160') ~ "Status 6",
+           CAN_INIT_STAT == 2999 ~ "inactive",
+           .default = NA
+         ),
+initial_status = as.factor(initial_status),
+transplant_year = year(REC_TX_DT))
+heart_SVM$initial_status <- relevel(heart_SVM$initial_status, ref = "Status 1")
+```
+
+
+
+```{r}
+#load other transplant sets for multi listing check
+setwd("C:/Users/alexa/Downloads")
+cand_kipa = read_sas("./cand_kipa.sas7bdat")
+cand_liin = read_sas("./cand_liin.sas7bdat")
+```
+
+
+```{r cars}
+
+
+#function to check overlapping listings
+check_overlap <- function(heart_df, other_df) {
+  # Filter for common PERS_ID
+  common_ids <- intersect(heart_df$PERS_ID, other_df$PERS_ID)
+  
+  # Subset datasets to only include common PERS_ID
+  filtered_heart_df <- heart_df %>% filter(PERS_ID %in% common_ids)
+  filtered_other_df <- other_df %>% filter(PERS_ID %in% common_ids)
+  
+  # Join heart_df with the filtered other_df for date comparison
+  result <- filtered_heart_df %>%
+    left_join(filtered_other_df, by = "PERS_ID", suffix = c("_heart", "_other")) %>%
+    filter(
+      # Case 1: Overlap with removal date
+      (CAN_LISTING_DT_heart >= CAN_LISTING_DT_other & 
+       CAN_LISTING_DT_heart <= CAN_REM_DT_other) |
+      # Case 2: No removal date, listing dates must match or overlap
+      (is.na(CAN_REM_DT_other) & CAN_LISTING_DT_heart >= CAN_LISTING_DT_other)
+    )
+  
+  return(result)
+}
+
+# Check overlap for both CAND_KIPA and CAND_LIIN
+overlap_kipa <- check_overlap(heart_SVM, cand_kipa)
+overlap_liin <- check_overlap(heart_SVM, cand_liin)
+overlap_kipa <- overlap_kipa %>% select(PERS_ID, WL_ORG_heart, WL_ORG_other)
+overlap_kipa = as.data.frame(overlap_kipa %>% group_by(PERS_ID) %>% distinct())
+overlap_liin = overlap_liin %>% select(PERS_ID, WL_ORG_heart, WL_ORG_other)
+overlap_liin = as.data.frame(overlap_liin %>% group_by(PERS_ID) %>% distinct())
+# Combine results
+overlap_results <- bind_rows(
+  overlap_kipa %>% mutate(Source = "CAND_KIPA"),
+  overlap_liin %>% mutate(Source = "CAND_LIIN")
+)
+
+#one entry for every patient
+consolidated_overlap <- overlap_results %>%
+  group_by(PERS_ID) %>%
+  dplyr::summarize(WL_ORG_combined = paste(unique(WL_ORG_other), collapse = ", "), .groups = "drop")
+consolidated_overlap
+
+heart_SVM <- heart_SVM %>%
+  left_join(consolidated_overlap, by = "PERS_ID") %>%
+  mutate(
+    WL_ORG_other_combined = ifelse(is.na(WL_ORG_combined), "None", WL_ORG_combined)
+  )
+
+#indicator variable for multiple listings
+heart_SVM = heart_SVM %>% mutate(
+  multi_listed = ifelse(!is.na(WL_ORG_combined), 1, 0)
+)
+```
+
+## Variable Setup
+
+```{r SVM crr transplant}
+heart_SVM <- heart_SVM |> 
+  mutate(sex = case_when(
+    CAN_GENDER == "M" ~ 1,
+    CAN_GENDER == "F" ~ 0),
+    hispanic = case_when(
+      CAN_ETHNICITY_SRTR == "LATINO" ~ 1,
+      CAN_ETHNICITY_SRTR == "NLATIN" ~ 0,
+      .default = NA),
+    initial_status_numeric = case_when(
+      CAN_INIT_STAT %in% c('1010', '1020', '1090', '1110', '2010', '2020', '2090', '2110', '3010', '6010', '6011', '6012', '9010') ~ 1,
+           CAN_INIT_STAT %in% c('1030', '1120', '2030', '2120', '6002', '6020', '6030', '9020') ~ 2,
+           CAN_INIT_STAT %in% c('1130', '2130', '6040') ~ 3,
+           CAN_INIT_STAT %in% c('1140', '2140', '6004') ~ 4,
+           CAN_INIT_STAT %in% c('1150', '2150') ~ 5,
+           CAN_INIT_STAT %in% c('1160', '2160') ~ 6,
+           .default = NA),
+    status_numeric = case_when(
+      status == "censor" ~ 0,
+      status == "transplant" ~ 1,
+      status == "death" ~ 2,
+      status == "removed" ~ 3
+    ))
+```
+
+## Table 1: Cohort Characteristics
+
+```{r table 1}
+heart_SVM = heart_SVM %>% mutate(
+  Male = ifelse(CAN_GENDER == 'M', 1, 0),
+  insurance = case_when(
+    CAN_PRIMARY_PAY %in% c(1) ~ "Private insurance",
+    CAN_PRIMARY_PAY %in% c(2, 3, 4, 5, 6, 7) ~ "Public insurance",
+    CAN_PRIMARY_PAY %in% c(8) ~ "Self",
+    CAN_PRIMARY_PAY %in% c(9) ~ "Donation",
+    CAN_PRIMARY_PAY %in% c(10) ~ "Free Care",
+    CAN_PRIMARY_PAY %in% c(11) ~ "Pending",
+    CAN_PRIMARY_PAY %in% c(12) ~ "Foreign Government",
+    CAN_PRIMARY_PAY %in% c(13) ~ "Medicare Unspecified",
+    CAN_PRIMARY_PAY %in% c(14) ~ "US/State Govt Agency",
+    CAN_PRIMARY_PAY %in% c(15) ~ "Unknown",
+    TRUE ~ "Other"),
+  insurance = as.factor(insurance),
+  education = case_when(
+    CAN_EDUCATION == 1 ~ "None",
+    CAN_EDUCATION == 2 ~ "Grade School (0-8)",
+    CAN_EDUCATION == 3 ~ "High School (9-12) or GED",
+    CAN_EDUCATION == 4 ~ "Attended College/Technical School",
+    CAN_EDUCATION == 5 ~ "Associate/Bachelor Degree",
+    CAN_EDUCATION == 6 ~ "Post-College Graduate Degree",
+    CAN_EDUCATION == 996 ~ "N/A (< 5 years old)",
+    CAN_EDUCATION == 998 ~ "Unknown",
+    TRUE ~ "Other")
+)
+heart_adi_table = heart_SVM |> 
+  select(CAN_AGE_AT_LISTING, Male, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, education, insurance, transplant_year) |> 
+  filter(adi_decile == 1 | adi_decile == 10) |> 
+  group_by(PX_ID) |> 
+  tbl_summary(by = adi_decile, label = list(
+    can_race ~ "Race",
+    initial_status ~ "Initial Status",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    SVM_PERCENTILE ~ "SVM Percentile",
+    SVI_percentile ~ "SVI Percentile",
+    mean_ADI ~ "ADI Percentile",
+    dci_percentile ~ "DCI Percentile",
+    CAN_ETHNICITY_SRTR ~ "Ethnicity",
+    status_table1 ~ "Outcome",
+    CAN_ABO ~ "Blood Type",
+    CAN_WGT_KG ~ "Weight (kg)",
+    CAN_HGT_CM ~ "Height (cm)",
+    multi_listed ~ "Multi Organ Listing",
+    education ~ "Education Level",
+    insurance ~ "Primary Payment Type",
+    transplant_year ~ "Year Transplanted"
+    
+  ),
+  statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)"))|> 
+  add_p()
+
+heart_table = heart_SVM |> 
+  select(CAN_AGE_AT_LISTING, Male, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, education, insurance, transplant_year) |> 
+  group_by(PX_ID) |> 
+  tbl_summary(label = list(
+    can_race ~ "Race",
+    initial_status ~ "Initial Status",
+    CAN_AGE_AT_LISTING ~ "Age",
+    durable_LVAD ~ "Durable LVAD",
+    SVM_PERCENTILE ~ "SVM Percentile",
+    SVI_percentile ~ "SVI Percentile",
+    mean_ADI ~ "ADI Percentile",
+    dci_percentile ~ "DCI Percentile",
+    CAN_ETHNICITY_SRTR ~ "Ethnicity",
+    status_table1 ~ "Outcome",
+    CAN_ABO ~ "Blood Type",
+    CAN_WGT_KG ~ "Weight (kg)",
+    CAN_HGT_CM ~ "Height (cm)",
+    multi_listed ~ "Multi Organ Listing",
+    education ~ "Education Level",
+    insurance ~ "Primary Payment Type",
+    transplant_year ~ "Year Transplanted"
+    
+  ),
+  statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)")) |>  
+  modify_table_body(filter, !(variable == "PX_ID" ))
+
+heart_SVM |> 
+  select(CAN_AGE_AT_LISTING, CAN_GENDER, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, CAN_EDUCATION,  insurance, transplant_year) |> 
+  group_by(PX_ID) |> 
+  tbl_summary(label = list(
+    can_race ~ "Race",
+    CAN_GENDER ~ "Sex"
+  ),
+  statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)"))
+
+tbl_html <- as.data.frame(heart_adi_table)
+html_table <- xtable(tbl_html)
+library(xtable)
+print(html_table, type = "html", file = "adi_heart_table.html")
+
+tbl_html_heart <- as.data.frame(heart_table)
+html_table_heart <- xtable(tbl_html_heart)
+print(html_table_heart, type = "html", file = "full_sample_heart_table.html")
+
+heart_table
+heart_adi_table
+```
+
+
+#impute missing height and weight
+```{r}
+heart_SVM$CAN_HGT_CM[is.na(heart_SVM$CAN_HGT_CM)] <-median(heart_SVM$CAN_HGT_CM, na.rm=T)
+heart_SVM$CAN_WGT_KG[is.na(heart_SVM$CAN_WGT_KG)] <-median(heart_SVM$CAN_WGT_KG, na.rm=T)
+
+
+
+```
+
+
+ 
+Fine-Gray CRR - unadjusted
+
+```{r}
+svm_un =  crr(Surv(survival_time,status) ~ SVM_decile, data = heart_SVM)
+
+svm_death_un = crr(Surv(survival_time,status) ~ SVM_decile, data = heart_SVM, failcode = "death")
+
+
+svi_un <- crr(Surv(survival_time,status) ~ SVI_decile, data = heart_SVM)
+
+svi_death_un <- crr(Surv(survival_time,status) ~ SVI_decile , data = heart_SVM, failcode = "death")
+
+
+adi_un <- crr(Surv(survival_time,status) ~ ADI_decile , data = heart_SVM)
+
+
+adi_death_un <- crr(Surv(survival_time,status) ~ ADI_decile, data = heart_SVM, failcode = "death")
+
+
+dci_un <- crr(Surv(survival_time,status) ~ DCI_decile, data = heart_SVM)
+
+
+dci_death_un <- crr(Surv(survival_time,status) ~ DCI_decile, data = heart_SVM, failcode = "death")
+
+dci_death_un
+
+svm_tidy_un = svm_un$tidy
+svi_tidy_un = svi_un$tidy
+adi_tidy_un = adi_un$tidy
+dci_tidy_un = dci_un$tidy
+svm_tidy_death_un = svm_death_un$tidy
+svi_tidy_death_un = svi_death_un$tidy
+adi_tidy_death_un = adi_death_un$tidy
+dci_tidy_death_un = dci_death_un$tidy
+```
+
+#make tables for model results
+```{r}
+create_clean_table <- function(data) {
+  # Process the data into the clean table format
+  clean_table <- data %>%
+    mutate(
+      Hazard_Ratio = exp(estimate), # Calculate Hazard Ratio
+      Confidence_Interval = paste0("(", round(exp(conf.low), 2), ", ", round(exp(conf.high), 2), ")") # Create CI as a string
+    ) %>%
+    select(
+      Variable = term,
+      Coefficient = estimate,
+      Hazard_Ratio,
+      `Standard Error` = std.error,
+      `P-Value` = p.value,
+      `Confidence Interval` = Confidence_Interval
+    )
+  return(as.data.frame(clean_table))
+}
+
+
+
+
+```
+
+#Partially adjusted models
+```{r}
+
+svm_small <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM)
+
+
+svm_death_small <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM, failcode = "death")
+
+
+svi_small <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM)
+
+svi_death_small <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM, failcode = "death")
+
+
+adi_small <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM)
+
+
+adi_death_small <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM, failcode = "death")
+
+
+dci_small <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM)
+
+
+dci_death_small <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG, data = heart_SVM, failcode = "death")
+
+svm_tidy_small = svm_small$tidy
+svi_tidy_small = svi_small$tidy
+adi_tidy_small = adi_small$tidy
+dci_tidy_small = dci_small$tidy
+svm_tidy_death_small = svm_death_small$tidy
+svi_tidy_death_small = svi_death_small$tidy
+adi_tidy_death_small = adi_death_small$tidy
+dci_tidy_death_small = dci_death_small$tidy
+```
+#Fully adjusted models
+```{r}
+
+svm_full <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM)
+
+
+svm_death_full <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM, failcode = "death")
+
+
+svi_full <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM)
+
+svi_death_full <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM, failcode = "death")
+
+
+adi_full <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM)
+
+
+adi_death_full <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM, failcode = "death")
+
+
+dci_full <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM)
+
+
+dci_death_full <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_SVM, failcode = "death")
+
+svm_tidy_full = svm_full$tidy
+svi_tidy_full = svi_full$tidy
+adi_tidy_full = adi_full$tidy
+dci_tidy_full = dci_full$tidy
+svm_tidy_death_full = svm_death_full$tidy
+svi_tidy_death_full = svi_death_full$tidy
+adi_tidy_death_full = adi_death_full$tidy
+dci_tidy_death_full = dci_death_full$tidy
+```
+#save model results for supplement
+#Supplemental Tables 1-24
+```{r}
+
+save_df_as_html <- function(data, file_name) {
+  # Convert the data frame to an HTML table
+  data = create_clean_table(data)
+  html_table <- xtable(data)
+  
+  # Save the table as an HTML file
+  print(html_table, type = "html", file = file_name)
+  
+  # Inform the user
+  message("HTML table saved as ", file_name)
+}
+
+save_df_as_html(svm_tidy_un, "svm_table_un.html") # Supplemental Table 1
+save_df_as_html(svi_tidy_un, "svi_table_un.html") # Supplemental Table 2
+save_df_as_html(adi_tidy_un, "adi_table_un.html") # Supplemental Table 3
+save_df_as_html(dci_tidy_un, "dci_table_un.html") # Supplemental Table 4
+save_df_as_html(svm_tidy_death_un, "svm_table_death_un.html") # Supplemental Table 5
+save_df_as_html(svi_tidy_death_un, "svi_table_death_un.html") # Supplemental Table 6
+save_df_as_html(adi_tidy_death_un, "adi_table_death_un.html") # Supplemental Table 7
+save_df_as_html(dci_tidy_death_un, "dci_table_death_un.html") # Supplemental Table 8
+
+save_df_as_html(svm_tidy_small, "svm_table_small.html") # Supplemental Table 9
+save_df_as_html(svi_tidy_small, "svi_table_small.html") # Supplemental Table 10
+save_df_as_html(adi_tidy_small, "adi_table_small.html") # Supplemental Table 11
+save_df_as_html(dci_tidy_small, "dci_table_small.html") # Supplemental Table 12
+save_df_as_html(svm_tidy_death_small, "svm_table_death_small.html") # Supplemental Table 13
+save_df_as_html(svi_tidy_death_small, "svi_table_death_small.html") # Supplemental Table 14
+save_df_as_html(adi_tidy_death_small, "adi_table_death_small.html") # Supplemental Table 15
+save_df_as_html(dci_tidy_death_small, "dci_table_death_small.html") # Supplemental Table 16
+
+save_df_as_html(svm_tidy_full, "svm_table_full.html") # Supplemental Table 17
+save_df_as_html(svi_tidy_full, "svi_table_full.html") # Supplemental Table 18
+save_df_as_html(adi_tidy_full, "adi_table_full.html") # Supplemental Table 19
+save_df_as_html(dci_tidy_full, "dci_table_full.html") # Supplemental Table 20
+save_df_as_html(svm_tidy_death_full, "svm_table_death_full.html") # Supplemental Table 21
+save_df_as_html(svi_tidy_death_full, "svi_table_death_full.html") # Supplemental Table 22
+save_df_as_html(adi_tidy_death_full, "adi_table_death_full.html") # Supplemental Table 23
+save_df_as_html(dci_tidy_death_full, "dci_table_death_full.html") # Supplemental Table 24
+svm_tidy_death_un
+```
+
+## Sensitivity Analysis
+
+```{r}
+svm_full_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed + CAN_ACPT_HCV_POS + CAN_ACPT_DCD , data = heart_SVM)
+
+
+svm_death_full_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +   CAN_ACPT_DCD, data = heart_SVM, failcode = "death")
+
+
+svi_full_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD, data = heart_SVM)
+
+svi_death_full_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD, data = heart_SVM, failcode = "death")
+
+
+adi_full_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD, data = heart_SVM)
+
+
+adi_death_full_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD, data = heart_SVM, failcode = "death")
+
+
+dci_full_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD, data = heart_SVM)
+
+
+dci_death_full_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO +  CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS + CAN_ACPT_DCD, data = heart_SVM, failcode = "death")
+
+svm_tidy_full_sens = svm_full_sens$tidy
+svi_tidy_full_sens = svi_full_sens$tidy
+adi_tidy_full_sens = adi_full_sens$tidy
+dci_tidy_full_sens = dci_full_sens$tidy
+svm_tidy_death_full_sens = svm_death_full_sens$tidy
+svi_tidy_death_full_sens = svi_death_full_sens$tidy
+adi_tidy_death_full_sens = adi_death_full_sens$tidy
+dci_tidy_death_full_sens = dci_death_full_sens$tidy
+
+save_df_as_html(svm_tidy_full_sens, "svm_table_full_sens.html") 
+save_df_as_html(svi_tidy_full_sens, "svi_table_full_sens.html") 
+save_df_as_html(adi_tidy_full_sens, "adi_table_full_sens.html") 
+save_df_as_html(dci_tidy_full_sens, "dci_table_full_sens.html") 
+save_df_as_html(svm_tidy_death_full_sens, "svm_table_death_full_sens.html")
+save_df_as_html(svi_tidy_death_full_sens, "svi_table_death_full_sens.html") 
+save_df_as_html(adi_tidy_death_full_sens, "adi_table_death_full_sens.html")
+save_df_as_html(dci_tidy_death_full_sens, "dci_table_death_full_sens.html") 
+```
+
+
+## Figure 3: Cumulative Incidence Curves
+
+```{r cumic curves}
+heart_SVM$statuscuminc <- factor(heart_SVM$status_numeric,
+                           levels = c(0,1,2,3),
+                           labels = c("On waitlist at end of follow-up","Received transplant","Died", "Removed for other reason"))
+
+# SVM Plot
+svm_cuminc <- cuminc(Surv(survival_time, statuscuminc) ~ SVM_decile, data = subset(heart_SVM, (SVM_decile == "1st Decile" | SVM_decile == "10th Decile"))) %>% 
+  ggcuminc(outcome = c("Received transplant", "Died")) +
+  ylim(0, 1) +
+  labs(
+    x = "Days",
+    title = "SVM"
+  ) + 
+  add_confidence_interval() +
+  theme(
+    plot.title = element_text(size = 18, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+# SVI Plot
+svi_cuminc <- cuminc(Surv(survival_time, statuscuminc) ~ SVI_decile, data = subset(heart_SVM, (SVI_decile == "1st Decile" | SVI_decile == "10th Decile"))) %>% 
+  ggcuminc(outcome = c("Received transplant", "Died")) +
+  ylim(0, 1) +
+  labs(
+    x = "Days",
+    title = "SVI"
+  ) + 
+  add_confidence_interval() +
+  theme(
+    plot.title = element_text(size = 18, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+# ADI Plot
+adi_cuminc <- cuminc(Surv(survival_time, statuscuminc) ~ ADI_decile, data = subset(heart_SVM, (ADI_decile == "1st Decile" | ADI_decile == "10th Decile"))) %>% 
+  ggcuminc(outcome = c("Received transplant", "Died")) +
+  ylim(0, 1) +
+  labs(
+    x = "Days",
+    title = "ADI"
+  ) + 
+  add_confidence_interval() +
+  theme(
+    plot.title = element_text(size = 18, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+# DCI Plot
+dci_cuminc <- cuminc(Surv(survival_time, statuscuminc) ~ DCI_decile, data = subset(heart_SVM, (DCI_decile == "1st Decile" | DCI_decile == "10th Decile"))) %>% 
+  ggcuminc(outcome = c("Received transplant", "Died")) +
+  ylim(0, 1) +
+  labs(
+    x = "Days",
+    title = "DCI"
+  ) + 
+  add_confidence_interval() +
+  theme(
+    plot.title = element_text(size = 18, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+
+# Arrange the plots in a grid
+grid.arrange(svm_cuminc, svi_cuminc, adi_cuminc, dci_cuminc, ncol = 2, nrow = 2)
+ggsave(
+  filename = "cumincs_heart.png",
+  plot = grid.arrange(svm_cuminc, svi_cuminc, adi_cuminc, dci_cuminc, ncol = 2, nrow = 2),
+  width = 12, height = 10  # Adjust width and height as needed
+)
+svm_cuminc
+
+tidy(cuminc(Surv(survival_time,statuscuminc) ~ ADI_decile, data = subset(heart_SVM, (ADI_decile == "1st Decile" | ADI_decile == "10th Decile")))) %>% filter(time == 1095)
+
+adi_cuminc
+```
+
+#SVM forest plots unadjusted model
+```{r svm forest}
+
+forest <- tidy(svm_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+svm_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "",
+       y = "SVM Decile",
+       title = "Unadjusted Model")+
+  theme_classic()
+-0
+
+forest <- tidy(svm_death_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svm_death_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "SVM Decile",
+       title = "Unadjusted Model")+
+   xlim(0.25, 2)+
+  theme_classic()
+
+svm_forest_un
+```
+#SVI forest plots unadjusted model
+```{r svi forest}
+
+forest <- tidy(svi_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+svi_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "",
+       y = "SVI Decile",
+       title = "Unadjusted Model")+
+  theme_classic()
+
+forest <- tidy(svi_death_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svi_death_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "SVI Decile",
+       title = "Unadjusted Model")+
+   xlim(0.15, 2)+
+  theme_classic()
+forest
+```
+#ADI forest plots unadjusted model
+
+```{r adi forest}
+
+forest <- tidy(adi_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "",
+       y = "ADI Decile",
+       title = "Unadjusted Model")+
+  theme_classic()
+
+forest <- tidy(adi_death_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_death_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "ADI Decile",
+       title = "Unadjusted Model")+
+  xlim(0.25, 5)+
+  theme_classic()
+
+```
+
+#DCI forest plots unadjusted model
+```{r dci forest}
+
+forest <- tidy(dci_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+dci_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "",
+       y = "DCI Decile",
+       title = "Unadjusted Model")+
+  theme_classic()
+
+forest <- tidy(dci_death_un)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+dci_death_forest_un <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x= "",
+       y = "DCI Decile",
+       title = "Unadjusted Model")+
+  xlim(0.25, 2)+
+  theme_classic()
+```
+
+
+
+
+#SVM forest plots partially adjusted model
+
+```{r svm forest}
+
+forest <- tidy(svm_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+svm_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "Sub-Hazard Ratio of Transplant",
+       y = "SVM Decile",
+       title = "Partially adjusted")+
+  theme_classic()
+
+
+forest <- tidy(svm_death_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svm_death_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "Sub-Hazard Ratio of Death",
+       y = "SVM Decile",
+       title = "Partially adjusted")+
+   xlim(0.25, 2)+
+  theme_classic()
+```
+#SVI forest plots partially adjusted model
+```{r svi forest}
+
+forest <- tidy(svi_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+svi_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "Sub-Hazard Ratio of Transplant",
+       y = "SVI Decile",
+       title = "Partially adjusted")+
+  theme_classic()
+
+forest <- tidy(svi_death_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svi_death_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "Sub-Hazard Ratio of Death",
+       y = "SVI Decile",
+       title = "Partially adjusted")+
+   xlim(0.15, 2)+
+  theme_classic()
+```
+
+#ADI forest plots partially adjusted model
+```{r adi forest}
+
+forest <- tidy(adi_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "Sub-Hazard Ratio of Transplant",
+       y = "ADI Decile",
+       title = "Partially adjusted")+
+  theme_classic()
+
+forest <- tidy(adi_death_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_death_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "Sub-Hazard Ratio of Death",
+       y = "ADI Decile",
+       title = "Partially adjusted")+
+  xlim(0.25, 5)+
+  theme_classic()
+
+```
+
+#DCI forest plots partially adjusted model
+```{r dci forest}
+
+forest <- tidy(dci_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+dci_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "Sub-Hazard Ratio of Transplant",
+       y = "DCI Decile",
+       title = "Partially adjusted")+
+  theme_classic()
+
+forest <- tidy(dci_death_small)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+dci_death_forest_small <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "Sub-Hazard Ratio of Death",
+       y = "DCI Decile",
+       title = "Partially adjusted")+
+  xlim(0.25, 2)+
+  theme_classic()
+```
+
+
+#SVM forest plots full model
+```{r svm forest}
+
+forest <- tidy(svm_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+svm_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "",
+       y = "SVM Decile",
+       title = "Full model")+
+  theme_classic()
+ 
+svm_forest_full
+
+forest <- tidy(svm_death_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svm_death_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "SVM Decile",
+       title = "Full model")+
+   xlim(0.25, 2)+
+  theme_classic()
+```
+#SVI forest plots full model
+```{r svi forest}
+
+forest <- tidy(svi_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+svi_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  xlim(0.5,1.2)+
+  labs(x = "",
+       y = "SVI Decile",
+       title = "Full model")+
+  theme_classic()
+
+forest <- tidy(svi_death_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+svi_death_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "SVI Decile",
+       title = "Full model")+
+   xlim(0.15, 2)+
+  theme_classic() 
+```
+#ADI forest plots full model
+```{r adi forest}
+
+forest <- tidy(adi_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "",
+       y = "ADI Decile",
+       title = "Full model")+
+  theme_classic()
+
+forest <- tidy(adi_death_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+adi_death_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point(color = "black") +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "ADI Decile",
+       title = "Full model")+
+  xlim(0.25, 5)+
+  theme_classic()
+forest
+adi_death_forest_full
+```
+#DCI forest plots full model
+```{r dci forest}
+
+forest <- tidy(dci_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+forest
+
+dci_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+    xlim(0.5,1.2)+
+  labs(x = "",
+       y = "DCI Decile",
+       title = "Full model")+
+  theme_classic()
+
+forest <- tidy(dci_death_full)
+print(forest)
+forest <- forest |> 
+  mutate(hazard = exp(estimate),
+         conf_int=1.96 * std.error,
+         conf_low = exp(estimate - conf_int),
+         conf_high = exp(estimate + conf_int))
+forest <- forest[c(1:9),]
+forest <- forest |>
+  mutate(decile = as.numeric(sub(".*?([0-9]+)[a-zA-Z ]*", "\\1",term))) |> 
+  arrange(decile)
+forest$term <- factor(forest$term, levels = forest$term)
+forest$decile <- as.factor(forest$decile)
+
+dci_death_forest_full <- forest |> 
+   ggplot(aes(x = hazard, y = decile)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf_low,xmax=conf_high))+
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black")+
+  labs(x = "",
+       y = "DCI Decile",
+       title = "Full model")+
+  xlim(0.25, 2)+
+  theme_classic()
+```
+
+```{r}
+legend <- ggplot() +
+  # Add the arrow from top to bottom
+  annotate("segment", 
+           x = 1, xend = 1, 
+           y = .95, yend = .05, 
+           arrow = arrow(type = "closed", length = unit(0.05, "inches")),
+           size = .5) +
+
+  # Top label
+  annotate("text", x = 1, y = 1.05, label = "Most\nDisadvantage", size = 3, hjust = 0.5) +
+
+  # Bottom label
+  annotate("text", x = 1, y = -0.05, label = "Least\nDisadvantage", size = 3, hjust = 0.5) +
+
+  # Set axis limits and turn off axes
+  coord_cartesian(xlim = c(0.5, 1.5), ylim = c(-0.1, 1.1), clip = "off") +
+  theme_void()
+legend
+```
+
+
+# Supplemental Figure 2: SVM Transplant Forest Plot
+# Supplemental Figure 5: SVM Death Forest Plot
+```{r}
+grid.arrange(svm_forest_un,svm_forest_small, svm_forest_full, legend, ncol =4, nrow = 1, widths = c(3,3,3,1))
+
+grid.arrange(svm_death_forest_un, svm_death_forest_small, svm_death_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+
+
+grid_tx <- arrangeGrob(svm_forest_un,svm_forest_small, svm_forest_full,legend, ncol =4, nrow = 1, widths = c(3,3,3,1))  # Arrange in a 2-column grid
+ggsave("svm_transplant.png", grid_tx, width = 10, height = 5)
+grid_death <- arrangeGrob(svm_death_forest_un, svm_death_forest_small, svm_death_forest_full,legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+ggsave("svm_death.png", grid_death, width = 10, height = 5)
+```
+# Supplemental Figure 3: SVI Transplant Forest Plot
+# Supplemental Figure 6: SVI Death Forest Plot
+```{r figure 3}
+grid.arrange(svi_forest_un,svi_forest_small, svi_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+grid.arrange(svi_death_forest_un, svi_death_forest_small, svi_death_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+
+grid_tx <- arrangeGrob(svi_forest_un,svi_forest_small, svi_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))  # Arrange in a 2-column grid
+ggsave("svi_transplant.png", grid_tx, width = 10, height = 5)
+grid_death <- arrangeGrob(svi_death_forest_un, svi_death_forest_small, svi_death_forest_full,legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+ggsave("svi_death.png", grid_death, width = 10, height = 5)
+
+```
+
+# Figure 4: ADI Transplant/Death Forest Plot
+```{r figure 4}
+grid_tx <- arrangeGrob(adi_forest_un,adi_forest_small, adi_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))  # Arrange in a 2-column grid
+ggsave("adi_transplant.png", grid_tx, width = 10, height = 5)
+grid_death <- arrangeGrob(adi_death_forest_un,adi_death_forest_small, adi_death_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+ggsave("adi_death.png", grid_death, width = 10, height = 5)
+
+adi_death_and_tx <- grid.arrange(grid_tx, grid_death, ncol= 1, nrow = 2)
+ggsave("adi_death_transplant.png", adi_death_and_tx, width = 12, height = 14)
+```
+
+# Supplemental Figure 4: DCI Transplant Forest Plot
+# Supplemental Figure 7: DCI Death Forest Plot
+```{r figure 3}
+grid.arrange(dci_forest_un,dci_forest_small, dci_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+
+grid.arrange(dci_death_forest_un, dci_death_forest_small, dci_death_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+
+grid_tx <- arrangeGrob(dci_forest_un,dci_forest_small, dci_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))  # Arrange in a 2-column grid
+ggsave("dci_transplant.png", grid_tx, width = 10, height = 5)
+grid_death <- arrangeGrob(dci_death_forest_un, dci_death_forest_small, dci_death_forest_full, legend, ncol=4, nrow = 1, widths = c(3,3,3,1))
+ggsave("dci_death.png", grid_death, width = 10, height = 5)
+```
+# Durable LVAD usage by Decile
+```{r}
+lvad_svm <- heart_SVM %>%
+  group_by(svm_decile, durable_LVAD) %>%   # Group by decile and durable_LVAD
+  dplyr::summarize(count = n(), .groups = "drop") %>% # Count occurrences within each group
+  as.data.frame() %>%  # Convert to a data frame (optional)
+  group_by(svm_decile) %>%  # Group by decile only to calculate percentages
+  mutate(SVM = (count / sum(count)) * 100) %>%  # Calculate percentage for each decile
+  ungroup() %>%  # Remove grouping
+  filter(durable_LVAD == 1) %>%  # Keep only rows where durable_LVAD is 1
+  select(svm_decile, SVM) 
+lvad_svm
+
+## SVI
+lvad_svi <- heart_SVM %>%
+  group_by(svi_decile, durable_LVAD) %>% # Group by decile and blood type
+  dplyr::summarize(count = n(), .groups = "drop") %>% # Create count column
+  as.data.frame() %>% # Convert to data frame
+  group_by(svi_decile) %>% # Group by decile
+  mutate(SVI = (count/sum(count))*100) %>% # Create percentage column
+  ungroup() %>% 
+  filter(durable_LVAD == 1) %>% # Keep only blood type O
+  select(svi_decile, SVI) # Keep columns of interest
+lvad_svi
+
+## ADI
+lvad_adi <- heart_SVM %>%
+  group_by(adi_decile, durable_LVAD) %>% # Group by decile and blood type
+  dplyr::summarize(count = n(), .groups = "drop") %>% # Create count column
+  as.data.frame() %>% # Convert to data frame
+  group_by(adi_decile) %>% # Group by decile
+  mutate(ADI = (count/sum(count))*100) %>% # Create percentage column
+  ungroup() %>% 
+  filter(durable_LVAD == 1) %>% # Keep only blood type O
+  select(adi_decile, ADI) # Keep columns of interest
+lvad_adi
+
+## DCI
+lvad_dci <- heart_SVM %>%
+  group_by(dci_decile, durable_LVAD) %>% # Group by decile and blood type
+  dplyr::summarize(count = n(), .groups = "drop") %>% # Create count column
+  as.data.frame() %>% # Convert to data frame
+  group_by(dci_decile) %>% # Group by decile
+  mutate(DCI = (count/sum(count))*100) %>% # Create percentage column
+  ungroup() %>% 
+  filter(durable_LVAD == 1) %>% # Keep only blood type O
+  select(dci_decile, DCI) # Keep columns of interest
+lvad_dci = head(lvad_dci, 10)
+
+lvad_svi
+
+```
+
+```{r}
+lvad_dci
+lvad_df <- cbind(lvad_svm, lvad_svi, lvad_adi, lvad_dci) %>% # Join data sets by columns
+  select(-svi_decile, -adi_decile, dci_decile) %>% # Remove extra decile columns
+  rename(decile = svm_decile) # Change name to "decile"
+lvad_df
+
+rm(lvad_adi, lvad_dci, lvad_svi, lvad_svm) # Remove intermediate data
+
+# Reshape data set
+lvad_df <- lvad_df %>%
+  pivot_longer(cols = c(SVM, SVI, ADI, DCI), # Select columns to reshape data by
+               names_to = "index", # Set names to index column
+               values_to = "percent") # Set values to percent column
+lvad_df
+
+# Bar graph w/o facets (Figure 2: Durable LVAD usage by Decile)
+lvad_df_visual <- 
+  ggplot(lvad_df, aes(x = decile, y = percent, fill = index)) + # Set base
+  geom_col(position = "dodge") + # Set columns side-by-side
+  labs(title = "Percentage of Durable LVAD by Decile", # Set title
+       subtitle = "Data from SRTR 2024", # Set subtitle
+       x = "Decile", # Set x-axis label
+       y = "Percentage",  # Set y-axis label
+       fill = "Index") + # Set legend title
+  theme_classic() + # Set theme
+  scale_y_continuous(limits = c(0, 40),
+                     breaks = seq(0, 40, by = 10)) +
+  scale_x_continuous(breaks = seq(1,10))# Set y-axis 
+lvad_df_visual
+
+ggsave("lvad_deciles.png", lvad_df_visual, width = 10, height = 7)
+
+# Bar graph w/ facets
+facet_lvad_df_visual <- 
+  ggplot(lvad_df, aes(x = decile, y = percent, fill = index)) + # Set base
+  geom_col(position = "dodge") + # Set columns side-by-side
+  facet_wrap(~ index) + # Create facet grid
+  labs(title = "Percentage of Durable LVAD by Decile", # Set title
+       subtitle = "Data from SRTR 2024", # Set subtitle
+       x = "Decile",  # Set x-axis label
+       y = "Percentage", # Set y-axis label
+       fill = "Index") + # Set legend title
+  theme_bw() + # Set theme
+  scale_y_continuous(limits = c(0, 60),
+                     breaks = seq(0, 60, by = 10)) +
+  scale_x_continuous(breaks = seq(1,10)) # Set y-axis
+facet_lvad_df_visual
+
+
+```
+
+
