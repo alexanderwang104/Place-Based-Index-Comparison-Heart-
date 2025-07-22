@@ -32,6 +32,7 @@ library(pROC)
 library(coxme)
 library(tidycmprsk)
 library(xtable)
+library(QHScrnomo)
 ```
 
 ## Loading Data
@@ -71,21 +72,33 @@ rm(ADI_crosswalk)
 SVI codes missing data as -999. 
 
 ```{r}
+# SVI <- read_csv("SVI_2022_US_ZCTA.csv")
+# SVI <- SVI |> 
+#   select(FIPS, RPL_THEMES) |> 
+#   mutate(RPL_THEMES = case_when(RPL_THEMES < 0 ~ NA, .default = RPL_THEMES),
+#          ZIP = FIPS,
+#          SVI_percentile = as.numeric(RPL_THEMES*100))
+# SVI <- distinct(SVI, ZIP, .keep_all = TRUE)
+# slice_head(SVI, n=10)
+
+
+
 SVI <- read_csv("SVI_2022_US.csv")
 SVI_crosswalk <- read_excel("11_digit_FIPS_to_ZIP_crosswalk.xlsx")
 
 SVI <- left_join(SVI, select(SVI_crosswalk, TRACT, ZIP), by = c("FIPS" = "TRACT"))
-SVI <- SVI |> 
-  select(ZIP, RPL_THEMES) 
+SVI <- SVI |>
+  select(ZIP, RPL_THEMES)
 SVI <- SVI |> mutate(
   RPL_THEMES = case_when(RPL_THEMES < 0 ~ NA, .default = RPL_THEMES))
-SVI <- SVI |> 
-  group_by(ZIP) |> 
+SVI <- SVI |>
+  group_by(ZIP) |>
   mutate(SVI_percentile = mean(as.numeric(RPL_THEMES*100), na.rm = TRUE),
          median_SVI = median(as.numeric(RPL_THEMES*100), na.rm = TRUE))
 SVI <- distinct(SVI, ZIP, .keep_all = TRUE)
 rm(SVI_crosswalk)
-slice_head(SVI, n=10) 
+slice_head(SVI, n=10)
+
 
 
 ```
@@ -478,7 +491,7 @@ txt <- gen_text(unique_eligibility, label = "Excluded", bullet = TRUE)
 # Add the customized text to the side box
 p_cons <- add_side_box(p_cons, txt = txt)
 
-p_cons <- add_box(p_cons, txt = gen_text(cand_thor$durable_LVAD_table1, label = "Adult candidate registrations"))
+p_cons <- add_box(p_cons, txt = gen_text(cand_thor$durable_LVAD_table1, label = "Unique adult candidates"))
 
 ## Creating Analytic Sample 
 cand_thor <- cand_thor |> 
@@ -513,6 +526,8 @@ heart_SVM <- heart_SVM %>%
          mean_ADI = as.numeric(as.character(mean_ADI)), # ADI
          dci_percentile = as.numeric(as.character(dci_percentile))) # DCI
 
+heart_SVM2 <- heart_SVM
+
 # Use median score from transplant center listed at for candidates missing score percentile
 heart_SVM <- heart_SVM %>%
   group_by(CAN_LISTING_CTR_CD) %>% # Gather by transplant center
@@ -524,6 +539,22 @@ heart_SVM <- heart_SVM %>%
          SVI_percentile = ifelse(is.na(SVI_percentile), median_SVI, SVI_percentile),  #conditional to input corresponding composite score value
          mean_ADI = ifelse(is.na(mean_ADI), median_ADI, mean_ADI),  #conditional to input corresponding composite score value
          dci_percentile = ifelse(is.na(dci_percentile), median_DCI, dci_percentile))  #conditional to input corresponding composite score value
+
+comparison <- inner_join(heart_SVM, heart_SVM2, by = "PX_ID", suffix = c("_new", "_orig"))
+imputations <- comparison %>%
+  summarise(
+    SVM_diff = sum(is.na(SVM_PERCENTILE_new) != is.na(SVM_PERCENTILE_orig), na.rm = TRUE),
+    SVI_diff = sum(is.na(SVI_percentile_new) != is.na(SVI_percentile_orig), na.rm = TRUE),
+    ADI_diff = sum(is.na(mean_ADI_new) != is.na(mean_ADI_orig), na.rm = TRUE),
+    DCI_diff = sum(is.na(dci_percentile_new) != is.na(dci_percentile_orig), na.rm = TRUE),
+    SVM_percent = SVM_diff / 15203,
+    SVI_percent = SVI_diff / 15203,
+    ADI_percent = ADI_diff / 15203,
+    DCI_percent = DCI_diff / 15203
+
+  )
+imputations
+
 # Split Percentiles into Deciles
 heart_SVM <- heart_SVM %>% 
   group_by(PX_ID) %>%
@@ -669,8 +700,13 @@ heart_SVM <- heart_SVM |>
       status == "censor" ~ 0,
       status == "transplant" ~ 1,
       status == "death" ~ 2,
-      status == "removed" ~ 3
-    ))
+      status == "removal" ~ 3)
+    )
+
+heart_SVM <- heart_SVM |> 
+  mutate(
+     COVID = cut(start_date,as.Date(c('2019-01-01', '2020-01-01', '2020-07-01', '2021-01-01', "2021-07-01", "2022-01-01", "2022-07-01", '2023-01-01')), labels = c('Pre-COVID', "2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2"))
+  )
 ```
 
 ## Table 1: Cohort Characteristics
@@ -727,7 +763,8 @@ heart_adi_table = heart_SVM |>
     
   ),
   statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n} ({p}%)"))|> 
-  add_p()
+  add_p(test = list(can_race ~ "fisher.test", education ~ "fisher.test", initial_status ~ "fisher.test"), test.args = list(can_race = list(simulate.p.value = TRUE), education = list(simulate.p.value = TRUE), initial_status = list(simulate.p.value = TRUE)))
+
 
 heart_table = heart_SVM |> 
   select(CAN_AGE_AT_LISTING, Male, can_race, durable_LVAD,  initial_status, SVM_PERCENTILE, SVI_percentile, mean_ADI, dci_percentile, CAN_ETHNICITY_SRTR, status_table1, adi_decile, CAN_ABO, CAN_WGT_KG, CAN_HGT_CM, multi_listed, education, insurance, transplant_year) |> 
@@ -918,8 +955,8 @@ svi_tidy_death_full = svi_death_full$tidy
 adi_tidy_death_full = adi_death_full$tidy
 dci_tidy_death_full = dci_death_full$tidy
 ```
-#save model results for supplement
-#Supplemental Tables 1-24
+# save model results for supplement
+# Supplemental Tables 1-24
 ```{r}
 
 save_df_as_html <- function(data, file_name) {
@@ -1006,7 +1043,250 @@ save_df_as_html(svi_tidy_death_full_sens, "svi_table_death_full_sens.html")
 save_df_as_html(adi_tidy_death_full_sens, "adi_table_death_full_sens.html")
 save_df_as_html(dci_tidy_death_full_sens, "dci_table_death_full_sens.html") 
 ```
+# Measures of fit
 
+```{r c-index transplant}
+library(prodlim)
+library(riskRegression)
+all_indices <- c("ADI_decile", "SVI_decile", "SVM_decile", "DCI_decile", "CAN_ABO", "CAN_GENDER" , "CAN_HGT_CM" , "CAN_WGT_KG","initial_status" , "durable_LVAD" , "multi_listed")
+heart_complete <- heart_SVM[complete.cases(heart_SVM[,all_indices]), ]
+adi_fgr <- FGR(Hist(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "transplant")
+svm_fgr <- FGR(Hist(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "transplant")
+svi_fgr <- FGR(Hist(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "transplant")
+dci_fgr <- FGR(Hist(survival_time,status) ~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "transplant")
+
+
+
+
+model_score <- Score(
+  list("adi_fgr" = adi_fgr,
+       "svm_fgr" = svm_fgr,
+       "svi_fgr" = svi_fgr,
+       "dci_fgr" = dci_fgr),
+  formula = Hist(survival_time, status) ~ 1,
+  data = heart_complete,
+  cause = "transplant",
+  metrics = c("Brier", "AUC"),
+  summary = c("IPA"), 
+  times = c(1095)
+)
+model_score[["Brier"]]
+model_score[["AUC"]]
+
+
+AICmanualfit <- function(model, name = "Model", num_var= NA) {
+logL <- model$crrFit$loglik
+AIC <- (-2 * logL) + (2 * num_var)
+message(paste0(name), " AIC = ", round(AIC,2))
+}
+
+BICmanualfit <- function(model, name = "Model", num_var= NA) {
+n <- model$crrFit$n
+logL <- model$crrFit$loglik
+BIC <- (-2 * logL) + (log(n) * num_var)
+message(paste0(name), " BIC = ", round(BIC,2))
+}
+
+AICmanualfit(adi_fgr, "ADI", 8)
+AICmanualfit(svm_fgr, "SVM", 8)
+AICmanualfit(svi_fgr, "SVI", 8)
+AICmanualfit(dci_fgr, "DCI", 8)
+BICmanualfit(adi_fgr, "ADI", 8)
+BICmanualfit(svm_fgr, "SVM", 8)
+BICmanualfit(svi_fgr, "SVI", 8)
+BICmanualfit(dci_fgr, "DCI", 8)
+
+```
+
+```{r c-index death}
+adi_fgr_death <- FGR(Hist(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "death")
+svm_fgr_death <- FGR(Hist(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "death")
+svi_fgr_death <- FGR(Hist(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "death")
+dci_fgr_death <- FGR(Hist(survival_time,status) ~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = heart_complete, cause = "death")
+
+
+
+
+model_score <- Score(
+  list("adi_fgr_death" = adi_fgr_death,
+       "svm_fgr_death" = svm_fgr_death,
+       "svi_fgr_death" = svi_fgr_death,
+       "dci_fgr_death" = dci_fgr_death),
+  formula = Hist(survival_time, status) ~ 1,
+  data = heart_complete,
+  cause = "transplant",
+  metrics = c("Brier", "AUC"),
+  summary = c("IPA"), 
+  times = c(1095)
+)
+model_score[["Brier"]]
+model_score[["AUC"]]
+
+
+AICmanualfit <- function(model, name = "Model", num_var= NA) {
+logL <- model$crrFit$loglik
+AIC <- (-2 * logL) + (2 * num_var)
+message(paste0(name), " AIC = ", round(AIC,2))
+}
+
+BICmanualfit <- function(model, name = "Model", num_var= NA) {
+n <- model$crrFit$n
+logL <- model$crrFit$loglik
+BIC <- (-2 * logL) + (log(n) * num_var)
+message(paste0(name), " BIC = ", round(BIC,2))
+}
+
+AICmanualfit(adi_fgr_death, "ADI_death", 8)
+AICmanualfit(svm_fgr_death, "SVM_death", 8)
+AICmanualfit(svi_fgr_death, "SVI_death", 8)
+AICmanualfit(dci_fgr_death, "DCI_death", 8)
+BICmanualfit(adi_fgr_death, "ADI_death", 8)
+BICmanualfit(svm_fgr_death, "SVM_death", 8)
+BICmanualfit(svi_fgr_death, "SVI_death", 8)
+BICmanualfit(dci_fgr_death, "DCI_death", 8)
+```
+
+
+## Clustering by Center
+```{r clustered ADI}
+
+complete_ADI <- c("ADI_decile", "CAN_ABO", "CAN_GENDER" , "CAN_HGT_CM" , "CAN_WGT_KG","initial_status" , "durable_LVAD" , "multi_listed")
+ADI_complete <- heart_SVM[complete.cases(heart_SVM[,complete_ADI]), ]
+adi_covariates <- model.matrix(~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = ADI_complete)[, -1]
+
+adi_clustered <- crrc(ftime = ADI_complete$survival_time,
+     fstatus = ADI_complete$status_numeric,
+     cov1 = adi_covariates,
+     cluster = ADI_complete$CAN_LISTING_CTR_CD,
+     failcode = 1,
+     cencode = 0)
+
+adi_clustered_death <- crrc(ftime = ADI_complete$survival_time,
+     fstatus = ADI_complete$status_numeric,
+     cov1 = adi_covariates,
+     cluster = ADI_complete$CAN_LISTING_CTR_CD,
+     failcode = 2,
+     cencode = 0)
+```
+
+```{r clustered SVM}
+complete_SVM <- c("SVM_decile", "CAN_ABO", "CAN_GENDER" , "CAN_HGT_CM" , "CAN_WGT_KG","initial_status" , "durable_LVAD" , "multi_listed")
+SVM_complete <- heart_SVM[complete.cases(heart_SVM[,complete_SVM]), ]
+svm_covariates <- model.matrix(~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = SVM_complete)[, -1]
+
+svm_clustered <- crrc(ftime = SVM_complete$survival_time,
+     fstatus = SVM_complete$status_numeric,
+     cov1 = svm_covariates,
+     cluster = SVM_complete$CAN_LISTING_CTR_CD,
+     failcode = 1,
+     cencode = 0)
+
+svm_clustered_death <- crrc(ftime = SVM_complete$survival_time,
+     fstatus = SVM_complete$status_numeric,
+     cov1 = svm_covariates,
+     cluster = SVM_complete$CAN_LISTING_CTR_CD,
+     failcode = 2,
+     cencode = 0)
+```
+
+
+```{r SVI clustered}
+complete_SVI <- c("SVI_decile", "CAN_ABO", "CAN_GENDER" , "CAN_HGT_CM" , "CAN_WGT_KG","initial_status" , "durable_LVAD" , "multi_listed")
+SVI_complete <- heart_SVM[complete.cases(heart_SVM[,complete_SVI]), ]
+svi_covariates <- model.matrix(~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = SVI_complete)[, -1]
+
+svi_clustered <- crrc(ftime = SVI_complete$survival_time,
+     fstatus = SVI_complete$status_numeric,
+     cov1 = svi_covariates,
+     cluster = SVI_complete$CAN_LISTING_CTR_CD,
+     failcode = 1,
+     cencode = 0)
+
+svi_clustered_death <- crrc(ftime = SVI_complete$survival_time,
+     fstatus = SVI_complete$status_numeric,
+     cov1 = svi_covariates,
+     cluster = SVI_complete$CAN_LISTING_CTR_CD,
+     failcode = 2,
+     cencode = 0)
+```
+
+```{r clustered DCI}
+complete_DCI <- c("DCI_decile", "CAN_ABO", "CAN_GENDER" , "CAN_HGT_CM" , "CAN_WGT_KG","initial_status" , "durable_LVAD" , "multi_listed")
+DCI_complete <- heart_SVM[complete.cases(heart_SVM[,complete_DCI]), ]
+dci_covariates <- model.matrix(~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed, data = DCI_complete)[, -1]
+
+dci_clustered <- crrc(ftime = DCI_complete$survival_time,
+     fstatus = DCI_complete$status_numeric,
+     cov1 = dci_covariates,
+     cluster = DCI_complete$CAN_LISTING_CTR_CD,
+     failcode = 1,
+     cencode = 0)
+
+dci_clustered_death <- crrc(ftime = DCI_complete$survival_time,
+     fstatus = DCI_complete$status_numeric,
+     cov1 = dci_covariates,
+     cluster = DCI_complete$CAN_LISTING_CTR_CD,
+     failcode = 2,
+     cencode = 0)
+```
+
+
+```{r clustered model output}
+cluster_tidy_tables <- function(model, covariate_matrix) {
+  summary_model <- summary(model)
+  summary_model$term <- colnames(covariate_matrix)
+  tidy_model <- data.frame(
+    Variable = summary_model$term,
+    Coefficient = summary_model$coef[,"coef"],
+    Hazard_Ratio = summary_model$conf.int[, "exp(coef)"],
+    lower_ci= summary_model$conf.int[, "2.5%"],
+    upper_ci = summary_model$conf.int[, "97.5%"],
+    Standard_Error = summary_model$coef[,"se(coef)"],
+    P_Value = summary_model$coef[,"p-value"]) |> 
+    mutate( 
+      Confidence_Interval = paste0("(", round(lower_ci, 2), ", ", round(upper_ci, 2), ")"),
+      )%>%
+    select(
+      Variable,
+      Coefficient,
+      Hazard_Ratio,
+      Standard_Error,
+      P_Value,
+      `Confidence Interval` = Confidence_Interval
+    )
+  print(tidy_model)
+}
+
+save_clustered_table <- function(data, file_name) {
+  html_table <- xtable(data)
+  # Save the table as an HTML file
+  print(html_table, type = "html", file = file_name)
+   # Inform the user
+  message("HTML table saved as ", file_name)
+  
+}
+
+
+adi_clustered_tidy <- cluster_tidy_tables(adi_clustered, adi_covariates)
+svm_clustered_tidy <- cluster_tidy_tables(svm_clustered, svm_covariates)
+svi_clustered_tidy <- cluster_tidy_tables(svi_clustered, svi_covariates)
+dci_clustered_tidy <- cluster_tidy_tables(dci_clustered, dci_covariates)
+
+adi_clustered_death_tidy <- cluster_tidy_tables(adi_clustered_death, adi_covariates)
+svm_clustered_death_tidy <- cluster_tidy_tables(svm_clustered_death, svm_covariates)
+svi_clustered_death_tidy <- cluster_tidy_tables(svi_clustered_death, svi_covariates)
+dci_clustered_death_tidy <- cluster_tidy_tables(dci_clustered_death, dci_covariates)
+
+
+save_clustered_table(svm_clustered_tidy, "svm_clustered.html")
+save_clustered_table(svi_clustered_tidy, "svi_clustered.html")
+save_clustered_table(adi_clustered_tidy, "adi_clustered.html")
+save_clustered_table(dci_clustered_tidy, "dci_clustered.html") 
+save_clustered_table(svm_clustered_death_tidy, "svm_clustered_death.html")
+save_clustered_table(svi_clustered_death_tidy, "svi_clustered_death.html")
+save_clustered_table(adi_clustered_death_tidy, "adi_clustered_death.html")
+save_clustered_table(dci_clustered_death_tidy, "dci_clustered_death.html")
+```
 
 ## Figure 3: Cumulative Incidence Curves
 
@@ -1938,5 +2218,166 @@ facet_lvad_df_visual
 
 
 ```
+
+```{r sensitivty analysis - individual level characteristics, no COVID}
+
+adi_individual_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING, data = heart_SVM)
+
+
+adi_death_individual_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING, data = heart_SVM, failcode = "death")
+
+svi_individual_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING, data = heart_SVM)
+
+
+svi_death_individual_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING, data = heart_SVM, failcode = "death")
+
+svm_individual_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING, data = heart_SVM)
+
+
+svm_death_individual_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING, data = heart_SVM, failcode = "death")
+
+dci_individual_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING, data = heart_SVM)
+
+
+dci_death_individual_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING, data = heart_SVM, failcode = "death")
+
+tidy_adi_individual_sens = adi_individual_sens$tidy
+tidy_svi_individual_sens = svi_individual_sens$tidy
+tidy_svm_individual_sens = svm_individual_sens$tidy
+tidy_dci_individual_sens = dci_individual_sens$tidy
+tidy_adi_death_individual_sens = adi_death_individual_sens$tidy
+tidy_svi_death_individual_sens = svi_death_individual_sens$tidy
+tidy_svm_death_individual_sens = svm_death_individual_sens$tidy
+tidy_dci_death_individual_sens = dci_death_individual_sens$tidy
+
+save_df_as_html(tidy_adi_individual_sens, "adi_table_individual_sens.html") 
+save_df_as_html(tidy_svi_individual_sens, "svi_table_individual_sens.html") 
+save_df_as_html(tidy_svm_individual_sens, "svm_table_individual_sens.html") 
+save_df_as_html(tidy_dci_individual_sens, "dci_table_individual_sens.html") 
+
+save_df_as_html(tidy_adi_death_individual_sens, "adi_table_death_individual_sens.html") 
+save_df_as_html(tidy_svi_death_individual_sens, "svi_table_death_individual_sens.html") 
+save_df_as_html(tidy_svm_death_individual_sens, "svm_table_death_individual_sens.html") 
+save_df_as_html(tidy_dci_death_individual_sens, "dci_table_death_individual_sens.html") 
+
+```
+
+
+```{r sensitivity analysis - COVID}
+adi_covid_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING + COVID, data = heart_SVM)
+
+
+adi_death_covid_sens <- crr(Surv(survival_time,status) ~ ADI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING + COVID, data = heart_SVM, failcode = "death")
+
+svi_covid_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING + COVID, data = heart_SVM)
+
+
+svi_death_covid_sens <- crr(Surv(survival_time,status) ~ SVI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING + COVID, data = heart_SVM, failcode = "death")
+
+svm_covid_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING + COVID, data = heart_SVM)
+
+
+svm_death_covid_sens <- crr(Surv(survival_time,status) ~ SVM_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING + COVID, data = heart_SVM, failcode = "death")
+
+dci_covid_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_ETHNICITY_SRTR + education + CAN_AGE_AT_LISTING + COVID, data = heart_SVM)
+
+
+dci_death_covid_sens <- crr(Surv(survival_time,status) ~ DCI_decile + CAN_ABO  + CAN_GENDER + CAN_HGT_CM + CAN_WGT_KG + initial_status + durable_LVAD + multi_listed+ CAN_ACPT_HCV_POS +  CAN_ACPT_DCD + can_race + CAN_AGE_AT_LISTING + CAN_ETHNICITY_SRTR + education+ CAN_AGE_AT_LISTING  + COVID, data = heart_SVM, failcode = "death")
+
+tidy_adi_covid_sens = adi_covid_sens$tidy
+tidy_svi_covid_sens = svi_covid_sens$tidy
+tidy_svm_covid_sens = svm_covid_sens$tidy
+tidy_dci_covid_sens = dci_covid_sens$tidy
+tidy_adi_death_covid_sens = adi_death_covid_sens$tidy
+tidy_svi_death_covid_sens = svi_death_covid_sens$tidy
+tidy_svm_death_covid_sens = svm_death_covid_sens$tidy
+tidy_dci_death_covid_sens = dci_death_covid_sens$tidy
+
+save_df_as_html(tidy_adi_covid_sens, "adi_table_covid_sens.html") 
+save_df_as_html(tidy_svi_covid_sens, "svi_table_covid_sens.html") 
+save_df_as_html(tidy_svm_covid_sens, "svm_table_covid_sens.html") 
+save_df_as_html(tidy_dci_covid_sens, "dci_table_covid_sens.html") 
+
+save_df_as_html(tidy_adi_death_covid_sens, "adi_table_death_covid_sens.html") 
+save_df_as_html(tidy_svi_death_covid_sens, "svi_table_death_covid_sens.html") 
+save_df_as_html(tidy_svm_death_covid_sens, "svm_table_death_covid_sens.html") 
+save_df_as_html(tidy_dci_death_covid_sens, "dci_table_death_covid_sens.html") 
+```
+
+# Checking PH assumption
+
+```{r ADI PH Assumption}
+# failcodes_to_check <- c(1, 2)
+# all_failcode_results <- list()
+# colnames(adi_covariates) <- make.names(colnames(adi_covariates))
+# 
+# for (fc in failcodes_to_check) {
+#   cat("\n=== Checking for failcode:", fc, "===\n")
+#   
+#   # Initialize results dataframe for this failcode
+#   ph_check_results <- data.frame(
+#     Covariate = colnames(adi_covariates),
+#     Time_Interaction_Estimate = NA,
+#     Time_Interaction_SE = NA,
+#     Time_Interaction_p = NA
+#   )
+#   
+#   # Loop through each covariate
+#   for (i in 1:27) {
+#     covariate_name <- colnames(adi_covariates)[i]
+#     cat("Checking PH assumption for:", covariate_name, "\n")
+#     
+#     # Extract just one covariate for time interaction
+#     cov2_mat <- adi_covariates[, i, drop = FALSE]
+#     
+#     # Fit Fine-Gray model with time interaction
+#     fit <- tryCatch(
+#       {
+#         cmprsk::crr(
+#           ftime = ADI_complete$survival_time,
+#           fstatus = ADI_complete$status_numeric,
+#           cov1 = adi_covariates,
+#           cov2 = cov2_mat,
+#           tf = function(t) t,
+#           failcode = fc,
+#           cencode = 0
+#         )
+#       },
+#       error = function(e) {
+#         warning(paste("Model failed for:", covariate_name, "-", e$message))
+#         return(NULL)
+#       }
+#     )
+#     
+#     # If model fit successfully, extract estimates
+#     if (!is.null(fit)) {
+#       est <- tail(fit$coef, 1)
+#       se <- tail(sqrt(diag(fit$var)), 1)
+#       pval <- 2 * (1 - pnorm(abs(est / se)))
+#       
+#       ph_check_results[i, 2:4] <- c(est, se, pval)
+#     }
+#   }
+#   
+#   # Sort results by p-value
+#   ph_check_results <- ph_check_results[order(ph_check_results$Time_Interaction_p), ]
+#   
+#   # Store in list under this failcode
+#   all_failcode_results[[paste0("failcode_", fc)]] <- ph_check_results
+# }
+# 
+# # View results for failcode 1
+# print(all_failcode_results$failcode_1)
+# adi_transplant_ph <-all_failcode_results$failcode_1
+# 
+# # View results for failcode 2
+# print(all_failcode_results$failcode_2)
+# adi_death_ph <-all_failcode_results$failcode_2
+# 
+# 
+# save_clustered_table(all_failcode_results$failcode_1, "ADI Transplant PH Assumption.html")
+# save_clustered_table(all_failcode_results$failcode_2, "ADI Death PH Assumption.html")
+
+```  
 
 
